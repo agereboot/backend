@@ -13,6 +13,17 @@ urlpatterns = [
     path("questions/", views.get_questions),
     path("answers/", views.submit_answers),
     path("answers/me/", views.get_user_answers),
+    path("bulk-upload/", views.bulk_employee_upload),
+    path("download-template/", views.download_employee_template),
+    path("invite-employee/", views.invite_employee),
+    path("reset-password/", views.reset_password),
+    path("forgot-password/", views.forgot_password),
+    path("employee_data/", views.employees_list_api),
+    path("employees/<int:user_id>/", views.employee_edit_api, name="employee-edit"),
+    path("dropdowns/locations/", views.location_dropdown_api),
+    path("dropdowns/departments/", views.department_dropdown_api),
+    path("dropdowns/status/", views.status_dropdown_api),
+
 
 
 ]

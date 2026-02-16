@@ -132,3 +132,8 @@ class UserAnswerSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Date is required")
 
         return data
+
+
+
+class ExcelUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()

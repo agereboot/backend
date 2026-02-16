@@ -1,5 +1,5 @@
 asgiref==3.11.0
-certifi==2025.11.12
+certifi==2026.1.4
 cffi==2.0.0
 charset-normalizer==3.4.4
 cryptography==46.0.3
@@ -9,10 +9,17 @@ django-cors-headers==4.9.0
 django-environ==0.12.0
 djangorestframework==3.16.1
 djangorestframework_simplejwt==5.5.1
+et_xmlfile==2.0.0
 idna==3.11
+numpy==2.4.2
+openpyxl==3.1.5
+pandas==3.0.0
+pip_system_certs==5.3
 pycparser==2.23
 PyJWT==2.10.1
+python-dateutil==2.9.0.post0
 requests==2.32.5
+six==1.17.0
 sqlparse==0.5.4
 tzdata==2025.2
 urllib3==2.6.0
