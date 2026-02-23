@@ -130,6 +130,54 @@ class EmployeePlan(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.plan.name}"
 
+class Challenge(models.Model):
+    STATUS_CHOICES = (
+        ("draft", "Draft"),
+        ("active", "Active"),
+        ("completed", "Completed"),
+        ("expired", "Expired"),
+    )
+
+    company = models.ForeignKey(Company, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+
+    name = models.CharField(max_length=255)
+    reward = models.CharField(max_length=255)
+    rules = models.TextField()
+
+    start_date = models.DateField()
+    end_date = models.DateField()
+
+    challenge_type = models.CharField(max_length=100)  # ex: AgeReboot-TN
+
+    departments = models.ManyToManyField(Department, blank=True)
+    locations = models.ManyToManyField(Location, blank=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+class ChallengeParticipant(models.Model):
+    STATUS_CHOICES = (
+        ("joined", "Joined"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+    )
+
+    challenge = models.ForeignKey(Challenge, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    progress = models.PositiveIntegerField(default=0)  # %
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="joined")
+
+    joined_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ("challenge", "user")
 
 class Question(models.Model):
     QUESTION_TYPES = (

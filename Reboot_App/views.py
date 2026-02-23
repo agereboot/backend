@@ -12,7 +12,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from .utils import generate_otp, send_otp_email, otp_expiry_time
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
-from .models import UserProfile,Question,UserAnswer,Role, Location, Department, Plan, EmployeePlan
+from .models import UserProfile,Question,UserAnswer,Role, Location, Department, Plan, EmployeePlan,Challenge,ChallengeParticipant
 import pandas as pd
 from datetime import timedelta
 from .helpers import (
@@ -27,7 +27,9 @@ from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
 from django.contrib.auth.hashers import make_password
 from .utils import is_token_valid, clear_reset_token
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Avg
+from django.shortcuts import get_object_or_404
+
 
 
 
@@ -184,6 +186,7 @@ def login_view(request):
     user = serializer.validated_data["user"]
     refresh = RefreshToken.for_user(user)
 
+    profile = user.profile  
     return Response({
         "success": True,
         "message": "Login successful",
@@ -191,6 +194,8 @@ def login_view(request):
             "user_id": user.id,
             "username": user.username,
             "email": user.email,
+            "role_id": profile.role.id if profile.role else None,
+            "role_name": profile.role.name if profile.role else None,
             "access_token": str(refresh.access_token),
             "refresh_token": str(refresh),
         }
@@ -351,138 +356,6 @@ def get_user_answers(request):
     serializer = UserAnswerSerializer(answers, many=True)
     return Response(serializer.data)
 
-
-# ==========================================
-# BULK EMPLOYEE UPLOAD
-# ==========================================
-# @api_view(["POST"])
-# @permission_classes([IsAuthenticated])
-# def bulk_employee_upload(request):
-
-#     REQUIRED_HEADERS = [
-#         "first_name",
-#         "last_name",
-#         "email",
-#         "phone_number",
-#         "location",
-#         "department",
-#         "plan",
-#     ]
-
-#     serializer = ExcelUploadSerializer(data=request.data)
-#     if not serializer.is_valid():
-#         return Response(serializer.errors, status=400)
-
-#     file = serializer.validated_data["file"]
-
-#     # read excel
-#     try:
-#         df = pd.read_excel(file)
-#     except Exception:
-#         return Response({"error": "Invalid Excel file"}, status=400)
-
-#     # validate headers
-#     if list(df.columns) != REQUIRED_HEADERS:
-#         return Response(
-#             {"error": "Invalid file format", "expected": REQUIRED_HEADERS},
-#             status=400,
-#         )
-
-#     hr_profile = request.user.profile
-#     company = hr_profile.company
-
-#     if not company:
-#         return Response({"error": "HR has no company assigned"}, status=400)
-
-#     employee_role = Role.objects.get(name="employee")
-
-#     df = df.dropna(how="all")
-
-#     created_users = []
-#     errors = []
-
-#     for index, row in df.iterrows():
-#         try:
-#             first_name = str(row["first_name"]).strip()
-#             last_name = str(row["last_name"]).strip()
-#             email = str(row["email"]).strip()
-#             phone = str(row["phone_number"]).strip()
-#             location_name = str(row["location"]).strip()
-#             department_name = str(row["department"]).strip()
-#             plan_name = str(row["plan"]).strip().lower()
-
-#             if not email:
-#                 continue
-
-#             username = generate_username(first_name, last_name)
-#             temp_password = generate_temp_password()
-
-
-#             # create user
-#             user = User.objects.create(
-#                 username=username,
-#                 email=email,
-#                 first_name=first_name,
-#                 last_name=last_name,
-#             )
-#             user.set_password(temp_password)
-#             user.save()
-
-#             # location & department
-#             location, department = get_location_department(
-#                 company, location_name, department_name
-#             )
-
-#             # update profile
-#             profile = user.profile
-#             profile.phone_number = phone
-#             profile.company = company
-#             profile.role = employee_role
-#             profile.location = location
-#             profile.department = department
-#             profile.invite_status = "registered"
-#             profile.is_email_verified = True
-#             profile.save()
-
-#             # assign plan
-#             if plan_name:
-#                 plan = Plan.objects.get(name=plan_name)
-#                 assign_plan_to_user(user, plan)
-
-#             # ✅ GENERATE SECURE RESET TOKEN (your function)
-#             token = generate_reset_token(user)
-
-#             # ✅ CREATE RESET LINK WITH TOKEN
-#             reset_link = f"http://localhost:3000/reset-password/{token}"
-
-#             # ✅ SEND EMAIL
-#             send_reset_password_email(user, temp_password, reset_link)
-
-#             # update invite status
-#             profile.invite_status = "invited"
-#             profile.save()
-
-#             created_users.append(username)
-
-#         except Exception as e:
-#             errors.append(f"Row {index+2}: {str(e)}")
-
-#     return Response(
-#         {
-#             "created_users": created_users,
-#             "errors": errors,
-#             "total_created": len(created_users),
-#         }
-#     )
-
-
-import pandas as pd
-from django.contrib.auth.models import User
-from django.core.validators import validate_email
-from django.core.exceptions import ValidationError
-from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
 
 
 COMMON_EMAIL_TYPOS = {
@@ -820,10 +693,6 @@ def forgot_password(request):
 
 
  
-from django.db.models import Count
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
 
 
 @api_view(["GET"])
@@ -834,9 +703,6 @@ def employees_list_api(request):
     if not company:
         return Response({"error": "No company assigned"}, status=400)
 
-    # ------------------------------------------------
-    # ❌ BLOCK WRONG QUERY KEYS (STRICT API)
-    # ------------------------------------------------
     allowed_keys = {"department_id", "location_id", "status"}
     wrong_keys = set(request.GET.keys()) - allowed_keys
 
@@ -850,16 +716,12 @@ def employees_list_api(request):
             status=400,
         )
 
-    # ------------------------------------------------
-    # FILTER PARAMS
-    # ------------------------------------------------
+  
     department_id = request.GET.get("department_id")
     location_id = request.GET.get("location_id")
     status_filter = request.GET.get("status")
 
-    # ------------------------------------------------
-    # ❌ TYPE VALIDATION (NO ORM CRASH)
-    # ------------------------------------------------
+
     if department_id and not department_id.isdigit():
         return Response(
             {"error": "department_id must be a number"},
@@ -872,18 +734,14 @@ def employees_list_api(request):
             status=400,
         )
 
-    # ------------------------------------------------
-    # BASE QUERY (FAST)
-    # ------------------------------------------------
+    
     profiles_qs = (
         UserProfile.objects
         .select_related("user", "department", "location", "role")
         .filter(company=company, role__name="employee")
     )
 
-    # ------------------------------------------------
-    # APPLY FILTERS
-    # ------------------------------------------------
+    
     if department_id:
         profiles_qs = profiles_qs.filter(department_id=int(department_id))
 
@@ -893,15 +751,11 @@ def employees_list_api(request):
     if status_filter:
         profiles_qs = profiles_qs.filter(invite_status=status_filter)
 
-    # ------------------------------------------------
-    # PREFETCH ACTIVE PLANS
-    # ------------------------------------------------
+   
     profiles_qs = profiles_qs.prefetch_related("user__employeeplan_set")
     print('profiles_qs',profiles_qs)
 
-    # ------------------------------------------------
-    # EMPLOYEE LIST 
-    # ------------------------------------------------
+   
     employees_data = []
 
     for profile in profiles_qs:
@@ -928,9 +782,7 @@ def employees_list_api(request):
             "status": profile.invite_status,
         })
 
-    # ==================================================
-    # 📊 SUMMARY COUNTS (NO FILTERS)
-    # ==================================================
+    
     all_profiles = UserProfile.objects.filter(
         company=company,
         role__name="employee"
@@ -971,9 +823,7 @@ def employees_list_api(request):
     for item in plan_counts_qs:
         plan_counts[item["plan__name"]] = item["count"]
 
-    # ------------------------------------------------
-    # FINAL RESPONSE
-    # ------------------------------------------------
+    
     return Response({
         "summary": {
             "total_emp_count": total_emp_count,
@@ -1009,25 +859,19 @@ def employee_edit_api(request, user_id):
     data = request.data
     profile = user.profile
 
-    # -----------------------------
-    # UPDATE USER FIELDS
-    # -----------------------------
+    
     user.first_name = data.get("first_name", user.first_name)
     user.last_name = data.get("last_name", user.last_name)
     user.save(update_fields=["first_name", "last_name"])
 
-    # -----------------------------
-    # UPDATE PROFILE FIELDS
-    # -----------------------------
+    
     if "phone_number" in data:
         profile.phone_number = data["phone_number"]
 
     if "invite_status" in data:
         profile.invite_status = data["invite_status"]
 
-    # -----------------------------
-    # DEPARTMENT UPDATE
-    # -----------------------------
+   
     if "department" in data:
         department = Department.objects.filter(
             company=company,
@@ -1042,9 +886,7 @@ def employee_edit_api(request, user_id):
 
         profile.department = department
 
-    # -----------------------------
-    # LOCATION UPDATE
-    # -----------------------------
+    
     if "location" in data:
         location = Location.objects.filter(
             company=company,
@@ -1061,9 +903,7 @@ def employee_edit_api(request, user_id):
 
     profile.save()
 
-    # -----------------------------
-    # PLAN UPDATE (REPLACE ACTIVE)
-    # -----------------------------
+   
     if "plan" in data:
         plan = Plan.objects.filter(
             name__iexact=data["plan"]
@@ -1090,9 +930,7 @@ def employee_edit_api(request, user_id):
             status="active"
         )
 
-    # -----------------------------
-    # RESPONSE
-    # -----------------------------
+   
     return Response({
         "message": "Employee updated successfully",
         "employee": {
@@ -1150,3 +988,233 @@ def status_dropdown_api(request):
             for key, label in UserProfile.INVITE_STATUS
         ]
     })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_challenge(request):
+    profile = request.user.profile
+
+    if profile.role.name != "hr_admin":
+        return Response({"error": "Only HR can create challenges"}, status=403)
+
+    data = request.data
+
+    challenge = Challenge.objects.create(
+        company=profile.company,
+        created_by=request.user,
+        name=data["name"],
+        reward=data["reward"],
+        rules=data["rules"],
+        start_date=data["start_date"],
+        end_date=data["end_date"],
+        challenge_type=data["challenge_type"],
+        status="active"
+    )
+
+    challenge.departments.set(
+        Department.objects.filter(id__in=data.get("department_ids", []))
+    )
+    challenge.locations.set(
+        Location.objects.filter(id__in=data.get("location_ids", []))
+    )
+
+    return Response({
+        "message": "Challenge created successfully",
+        "challenge_id": challenge.id
+    }, status=201)
+
+
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def hr_challenges_list(request):
+#     profile = request.user.profile
+#     print('profile',profile)
+
+#     qs = Challenge.objects.filter(company=profile.company)
+
+#     status_filter = request.GET.get("status")
+#     if status_filter:
+#         qs = qs.filter(status=status_filter)
+
+#     data = []
+#     for ch in qs:
+#         participant_count = ChallengeParticipant.objects.filter(challenge=ch).count()
+#         remaining_days = (ch.end_date - timezone.now().date()).days
+
+#         data.append({
+#             "id": ch.id,
+#             "name": ch.name,
+#             "reward": ch.reward,
+#             "participants": participant_count,
+#             "days_remaining": max(remaining_days, 0),
+#             "status": ch.status
+#         })
+
+#     return Response(data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def hr_challenges_list(request):
+    profile = request.user.profile
+
+    
+    qs = (
+        Challenge.objects
+        .filter(company=profile.company)
+        .select_related("created_by")
+        .prefetch_related("departments", "locations")
+        .annotate(
+            participants_count=Count("challengeparticipant", distinct=True),
+            avg_progress=Avg("challengeparticipant__progress"),
+        )
+    )
+
+    
+    status_filter = request.GET.get("status")
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+
+    today = timezone.now().date()
+    data = []
+
+    for ch in qs:
+        remaining_days = (ch.end_date - today).days
+
+        data.append({
+            "id": ch.id,
+            "name": ch.name,
+            "reward": ch.reward,
+
+            # 👥 Participants
+            "participants": ch.participants_count,
+
+            # 📊 Progress bar (0–100)
+            "average_progress": int(ch.avg_progress or 0),
+
+            # ⏳ Days remaining
+            "days_remaining": max(remaining_days, 0),
+
+            # 🏷 Departments
+            "departments": [
+                dept.name for dept in ch.departments.all()
+            ],
+
+            # 🧑 Created info
+            "created_at": ch.created_at.strftime("%d %b"),
+            "created_by": ch.created_by.first_name if ch.created_by else None,
+
+            # 🔖 Status
+            "status": ch.status,
+        })
+
+    return Response(data)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def employee_challenges(request):
+    profile = request.user.profile
+
+    qs = Challenge.objects.filter(
+        company=profile.company,
+        status="active"
+    ).filter(
+        Q(departments=profile.department) | Q(departments=None),
+        Q(locations=profile.location) | Q(locations=None)
+    ).distinct()
+
+    return Response([
+        {
+            "id": ch.id,
+            "name": ch.name,
+            "reward": ch.reward,
+            "end_date": ch.end_date
+        }
+        for ch in qs
+    ])
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def join_challenge(request, id):
+    challenge = get_object_or_404(Challenge, id=id, status="active")
+
+    obj, created = ChallengeParticipant.objects.get_or_create(
+        challenge=challenge,
+        user=request.user
+    )
+
+    if not created:
+        return Response({"message": "Already joined"})
+
+    return Response({"message": "Joined challenge successfully"})
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def update_progress(request, id):
+
+    participant = get_object_or_404(
+        ChallengeParticipant,
+        challenge_id=id,
+        user=request.user
+    )
+
+    # 🔴 STRICT KEY CHECK
+    if "progress" not in request.data:
+        return Response(
+            {"error": "progress field is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # 🔴 TYPE VALIDATION
+    try:
+        progress = int(request.data["progress"])
+    except (ValueError, TypeError):
+        return Response(
+            {"error": "progress must be a number"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # 🔴 RANGE VALIDATION
+    if progress < 0 or progress > 100:
+        return Response(
+            {"error": "progress must be between 0 and 100"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # ✅ UPDATE PROGRESS
+    participant.progress = progress
+
+    if progress >= 100:
+        participant.status = "completed"
+        participant.completed_at = timezone.now()
+    else:
+        participant.status = "inprogress"
+        participant.completed_at = None
+
+    participant.save()
+
+    return Response(
+        {
+            "message": "Progress updated",
+            "progress": participant.progress,
+            "status": participant.status,
+        },
+        status=status.HTTP_200_OK
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def challenge_participants(request, id):
+    qs = ChallengeParticipant.objects.filter(challenge_id=id)
+
+    return Response([
+        {
+            "employee": p.user.username,
+            "progress": p.progress,
+            "status": p.status
+        }
+        for p in qs
+    ])
+

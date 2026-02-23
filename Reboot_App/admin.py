@@ -65,6 +65,7 @@ from .models import (
     Question,
     QuestionOption,
     UserAnswer,
+    Challenge,ChallengeParticipant
 )
 
 from django.db import models
@@ -133,3 +134,12 @@ class EmployeePlanAdmin(admin.ModelAdmin):
     list_display = get_all_fields(EmployeePlan)
     search_fields = ("user__username", "plan__name")
 
+@admin.register(Challenge)
+class ChallengeAdmin(admin.ModelAdmin):
+    list_display = get_all_fields(Challenge)
+    search_fields = get_searchable_fields(Challenge)
+
+@admin.register(ChallengeParticipant)
+class ChallengeParticipantAdmin(admin.ModelAdmin):
+    list_display = get_all_fields(ChallengeParticipant)
+    search_fields = get_searchable_fields(ChallengeParticipant)

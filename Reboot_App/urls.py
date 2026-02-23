@@ -23,7 +23,13 @@ urlpatterns = [
     path("dropdowns/locations/", views.location_dropdown_api),
     path("dropdowns/departments/", views.department_dropdown_api),
     path("dropdowns/status/", views.status_dropdown_api),
-
+      path("hr/challenges/", views.create_challenge),
+    path("hr/challenges/list/", views.hr_challenges_list),
+    path("hr/challenges/<int:id>/participants/", views.challenge_participants), # challenge_id
+    path("employee/challenges/", views.employee_challenges),
+    path("employee/challenges/<int:id>/join/", views.join_challenge),#challenge_id
+    path("employee/challenges/<int:id>/progress/", views.update_progress), #challenge_id
+   
 
 
 ]
