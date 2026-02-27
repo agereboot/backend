@@ -606,23 +606,57 @@ def invite_employee(request):
     email = request.data.get("email")
 
     try:
-        user = UserProfile.objects.get(email=email)
-    except UserProfile.DoesNotExist:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
         return Response({"error": "User not found"}, status=404)
 
     token = generate_reset_token(user)
 
     send_reset_password_email(user, token)
 
-    user.status = "invited"
-    user.save()
+    profile = user.profile
+    profile.invite_status = "invited"
+    profile.save()
 
     return Response({"message": "Invitation sent"})
 
 
 
 
+# @api_view(["POST"])
+# def reset_password(request):
+
+#     token = request.data.get("token")
+#     new_password = request.data.get("password")
+
+#     if not token or not new_password:
+#         return Response(
+#             {"error": "Token and password required"},
+#             status=400
+#         )
+
+#     try:
+#         user = UserProfile.objects.get(reset_token=token)
+#     except UserProfile.DoesNotExist:
+#         return Response({"error": "Invalid token"}, status=400)
+
+#     if not is_token_valid(user, token):
+#         return Response({"error": "Token expired"}, status=400)
+
+#     user.password = make_password(new_password)
+#     user.status = "active"
+
+#     clear_reset_token(user)
+
+#     user.save()
+
+#     return Response({
+#         "message": "Password reset successful",
+#         "status": "active"
+#     })
+
 @api_view(["POST"])
+@permission_classes([AllowAny])
 def reset_password(request):
 
     token = request.data.get("token")
@@ -635,24 +669,33 @@ def reset_password(request):
         )
 
     try:
-        user = UserProfile.objects.get(reset_token=token)
+        profile = UserProfile.objects.get(reset_token=token)
     except UserProfile.DoesNotExist:
         return Response({"error": "Invalid token"}, status=400)
 
-    if not is_token_valid(user, token):
+    # validate token expiry
+    if not is_token_valid(profile, token):
         return Response({"error": "Token expired"}, status=400)
 
-    user.password = make_password(new_password)
-    user.status = "active"
-
-    clear_reset_token(user)
-
+    # ✅ UPDATE PASSWORD IN USER MODEL
+    user = profile.user
+    user.set_password(new_password)
     user.save()
+
+    # ✅ UPDATE PROFILE STATUS
+    profile.invite_status = "active"
+    profile.password_reset_required = False
+    profile.is_email_verified = True
+
+    clear_reset_token(profile)
+    profile.save()
 
     return Response({
         "message": "Password reset successful",
         "status": "active"
     })
+
+
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
