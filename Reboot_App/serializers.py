@@ -5,8 +5,10 @@ from django.contrib.auth import authenticate
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
-from .models import UserProfile,Question, QuestionOption, UserAnswer
-
+from .models import (
+    Role, Company, Location, Department, Plan,
+    UserProfile, Question, QuestionOption,UserAnswer
+)
 
 class RegisterSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
@@ -88,6 +90,8 @@ class LoginSerializer(serializers.Serializer):
         return data
 
 
+
+#QuestionOptionInlineSerializer
 class QuestionOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = QuestionOption
@@ -137,3 +141,86 @@ class UserAnswerSerializer(serializers.ModelSerializer):
 
 class ExcelUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
+
+
+
+class RoleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Role
+        fields = ["id", "name"]
+class CompanySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Company
+        fields = ["id", "name", "status", "created_at"]
+        read_only_fields = ["created_at"]
+
+class LocationSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="company.name", read_only=True)
+
+    class Meta:
+        model = Location
+        fields = ["id", "company", "company_name", "name"]
+
+
+class DepartmentSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="company.name", read_only=True)
+
+    class Meta:
+        model = Department
+        fields = ["id", "company", "company_name", "name"]
+
+
+class PlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Plan
+        fields = ["id", "name", "price", "duration_days", "features"]
+
+
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "username", "email", "first_name", "last_name"]
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    role_name = serializers.CharField(source="role.name", read_only=True)
+    company_name = serializers.CharField(source="company.name", read_only=True)
+    location_name = serializers.CharField(source="location.name", read_only=True)
+    department_name = serializers.CharField(source="department.name", read_only=True)
+
+    class Meta:
+        model = UserProfile
+        fields = [
+            "id", "user", "phone_number", "is_google_user",
+            "company", "company_name",
+            "role", "role_name",
+            "location", "location_name",
+            "department", "department_name",
+            "invite_status", "password_reset_required",
+            "is_email_verified", "is_phone_verified",
+        ]
+
+
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    """Used for partial updates by admin (excludes sensitive OTP/token fields)."""
+    class Meta:
+        model = UserProfile
+        fields = [
+            "phone_number", "company", "role", "location",
+            "department", "invite_status", "password_reset_required",
+            "is_email_verified", "is_phone_verified",
+        ]
+
+class QuestionOptionSerializer2(serializers.ModelSerializer):
+    class Meta:
+        model = QuestionOption
+        fields = ["id", "question", "label"]
+
+
+class QuestionWriteSerializer(serializers.ModelSerializer):
+    """Write serializer — options are managed via their own endpoint."""
+    class Meta:
+        model = Question
+        fields = ["id", "text", "question_type", "order", "is_required"]

@@ -1,18 +1,28 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.http import HttpResponse
-from rest_framework import status
+from rest_framework import status,generics
 from django.contrib.auth.models import User
-from .serializers import RegisterSerializer, LoginSerializer,QuestionSerializer,UserAnswerSerializer,ExcelUploadSerializer
+from .serializers import (RegisterSerializer, LoginSerializer,QuestionSerializer,
+UserAnswerSerializer,ExcelUploadSerializer,
+RoleSerializer,
+    CompanySerializer,
+    LocationSerializer,
+    DepartmentSerializer,
+    PlanSerializer,
+    UserProfileSerializer, UserProfileUpdateSerializer,
+    QuestionSerializer, QuestionWriteSerializer,
+    QuestionOptionSerializer,)
 from allauth.socialaccount.models import SocialAccount
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.shortcuts import redirect
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated,IsAdminUser
 from .utils import generate_otp, send_otp_email, otp_expiry_time
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
-from .models import UserProfile,Question,UserAnswer,Role, Location, Department, Plan, EmployeePlan,Challenge,ChallengeParticipant
+from .models import (UserProfile,Question,UserAnswer,Role,Location,
+ Department, Plan, EmployeePlan,Challenge,ChallengeParticipant,Company,QuestionOption)
 import pandas as pd
 from datetime import timedelta
 from .helpers import (
@@ -29,6 +39,8 @@ from django.contrib.auth.hashers import make_password
 from .utils import is_token_valid, clear_reset_token
 from django.db.models import Count, Q, Avg
 from django.shortcuts import get_object_or_404
+from rest_framework.filters import SearchFilter, OrderingFilter
+from django_filters.rest_framework import DjangoFilterBackend
 
 
 
@@ -1261,3 +1273,259 @@ def challenge_participants(request, id):
         for p in qs
     ])
 
+
+
+
+# ══════════════════════════════════════════════
+# ROLE
+# ══════════════════════════════════════════════
+
+class RoleListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /admin/roles/      → list all roles
+    POST /admin/roles/      → create a role
+    """
+    queryset = Role.objects.all()
+    serializer_class = RoleSerializer
+    permission_classes = [IsAdminUser]
+
+
+class RoleDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /admin/roles/<id>/  → retrieve role
+    PUT    /admin/roles/<id>/  → full update
+    PATCH  /admin/roles/<id>/  → partial update
+    DELETE /admin/roles/<id>/  → delete
+    """
+    queryset = Role.objects.all()
+    serializer_class = RoleSerializer
+    permission_classes = [IsAdminUser]
+
+
+# ══════════════════════════════════════════════
+# COMPANY
+# ══════════════════════════════════════════════
+
+class CompanyListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /admin/companies/   → list all companies
+    POST /admin/companies/   → create a company
+    """
+    queryset = Company.objects.all().order_by("-created_at")
+    serializer_class = CompanySerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [SearchFilter, OrderingFilter, DjangoFilterBackend]
+    search_fields = ["name"]
+    filterset_fields = ["status"]
+    ordering_fields = ["name", "created_at"]
+
+
+class CompanyDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /admin/companies/<id>/
+    PUT    /admin/companies/<id>/
+    PATCH  /admin/companies/<id>/
+    DELETE /admin/companies/<id>/
+    """
+    queryset = Company.objects.all()
+    serializer_class = CompanySerializer
+    permission_classes = [IsAdminUser]
+
+
+# ══════════════════════════════════════════════
+# LOCATION
+# ══════════════════════════════════════════════
+
+class LocationListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /admin/locations/        → list all locations (filter by ?company=<id>)
+    POST /admin/locations/        → create a location
+    """
+    queryset = Location.objects.select_related("company").all()
+    serializer_class = LocationSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [SearchFilter, DjangoFilterBackend]
+    search_fields = ["name", "company__name"]
+    filterset_fields = ["company"]
+
+
+class LocationDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /admin/locations/<id>/
+    PUT    /admin/locations/<id>/
+    PATCH  /admin/locations/<id>/
+    DELETE /admin/locations/<id>/
+    """
+    queryset = Location.objects.select_related("company").all()
+    serializer_class = LocationSerializer
+    permission_classes = [IsAdminUser]
+
+
+# ══════════════════════════════════════════════
+# DEPARTMENT
+# ══════════════════════════════════════════════
+
+class DepartmentListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /admin/departments/      → list (filter by ?company=<id>)
+    POST /admin/departments/      → create
+    """
+    queryset = Department.objects.select_related("company").all()
+    serializer_class = DepartmentSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [SearchFilter, DjangoFilterBackend]
+    search_fields = ["name", "company__name"]
+    filterset_fields = ["company"]
+
+
+class DepartmentDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /admin/departments/<id>/
+    PUT    /admin/departments/<id>/
+    PATCH  /admin/departments/<id>/
+    DELETE /admin/departments/<id>/
+    """
+    queryset = Department.objects.select_related("company").all()
+    serializer_class = DepartmentSerializer
+    permission_classes = [IsAdminUser]
+
+
+# ══════════════════════════════════════════════
+# PLAN
+# ══════════════════════════════════════════════
+
+class PlanListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /admin/plans/
+    POST /admin/plans/
+    """
+    queryset = Plan.objects.all()
+    serializer_class = PlanSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [SearchFilter]
+    search_fields = ["name"]
+
+
+class PlanDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /admin/plans/<id>/
+    PUT    /admin/plans/<id>/
+    PATCH  /admin/plans/<id>/
+    DELETE /admin/plans/<id>/
+    """
+    queryset = Plan.objects.all()
+    serializer_class = PlanSerializer
+    permission_classes = [IsAdminUser]
+
+
+# ══════════════════════════════════════════════
+# USER PROFILE
+# ══════════════════════════════════════════════
+
+class UserProfileListView(generics.ListAPIView):
+    """
+    GET /admin/user-profiles/
+    Supports filters: ?company=<id> &role=<id> &invite_status=active &department=<id> &location=<id>
+    Supports search:  ?search=<name/email>
+    """
+    queryset = UserProfile.objects.select_related(
+        "user", "company", "role", "location", "department"
+    ).all()
+    serializer_class = UserProfileSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [SearchFilter, DjangoFilterBackend, OrderingFilter]
+    search_fields = ["user__username", "user__email", "user__first_name", "user__last_name"]
+    filterset_fields = ["company", "role", "department", "location", "invite_status"]
+    ordering_fields = ["user__username", "user__email"]
+
+
+class UserProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /admin/user-profiles/<id>/   → retrieve profile
+    PATCH  /admin/user-profiles/<id>/   → partial update (role, company, dept, location …)
+    DELETE /admin/user-profiles/<id>/   → delete profile (and cascade to User)
+    """
+    queryset = UserProfile.objects.select_related(
+        "user", "company", "role", "location", "department"
+    ).all()
+    permission_classes = [IsAdminUser]
+
+    def get_serializer_class(self):
+        if self.request.method in ("PUT", "PATCH"):
+            return UserProfileUpdateSerializer
+        return UserProfileSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        profile = self.get_object()
+        user = profile.user
+        user.delete()          # cascades → deletes profile too
+        return Response(
+            {"detail": "User and profile deleted successfully."},
+            status=status.HTTP_204_NO_CONTENT,
+        )
+
+
+# ══════════════════════════════════════════════
+# QUESTION
+# ══════════════════════════════════════════════
+
+class QuestionListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /admin/questions/        → list all questions (with nested options)
+    POST /admin/questions/        → create a question
+    """
+    queryset = Question.objects.prefetch_related("options").all().order_by("order")
+    permission_classes = [IsAdminUser]
+    filter_backends = [SearchFilter, DjangoFilterBackend]
+    search_fields = ["text"]
+    filterset_fields = ["question_type", "is_required"]
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return QuestionWriteSerializer
+        return QuestionSerializer
+
+
+class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /admin/questions/<id>/
+    PUT    /admin/questions/<id>/
+    PATCH  /admin/questions/<id>/
+    DELETE /admin/questions/<id>/
+    """
+    queryset = Question.objects.prefetch_related("options").all()
+    permission_classes = [IsAdminUser]
+
+    def get_serializer_class(self):
+        if self.request.method in ("PUT", "PATCH"):
+            return QuestionWriteSerializer
+        return QuestionSerializer
+
+
+# ══════════════════════════════════════════════
+# QUESTION OPTION
+# ══════════════════════════════════════════════
+
+class QuestionOptionListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /admin/question-options/          → list all options (filter by ?question=<id>)
+    POST /admin/question-options/          → create an option
+    """
+    queryset = QuestionOption.objects.select_related("question").all()
+    serializer_class = QuestionOptionSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ["question"]
+    search_fields = ["label"]
+
+
+class QuestionOptionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET    /admin/question-options/<id>/
+    PUT    /admin/question-options/<id>/
+    PATCH  /admin/question-options/<id>/
+    DELETE /admin/question-options/<id>/
+    """
+    queryset = QuestionOption.objects.select_related("question").all()
+    serializer_class = QuestionOptionSerializer
+    permission_classes = [IsAdminUser]

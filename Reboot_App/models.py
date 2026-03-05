@@ -9,7 +9,7 @@ from django.dispatch import receiver
 class Role(models.Model):
     ROLE_CHOICES = (
         ("super_admin", "Super Admin"),
-        ("hr_admin", "HR Admin"),
+        ("hr_admin", "HR Admin"),   
         ("employee", "Employee"),
     )
 
@@ -224,3 +224,4 @@ class UserAnswer(models.Model):
 
     class Meta:
         unique_together = ("user", "question")
+
