@@ -30,35 +30,35 @@ urlpatterns = [
     path("employee/challenges/<int:id>/join/", views.join_challenge),#challenge_id
     path("employee/challenges/<int:id>/progress/", views.update_progress), #challenge_id
 
-    # ── Role ──────────────────────────────────────────────────────────────
+    # ── Role ──
     path("roles/",              views.RoleListCreateView.as_view(),    name="admin-role-list"),
     path("roles/<int:pk>/",     views.RoleDetailView.as_view(),        name="admin-role-detail"),
 
-    # ── Company ───────────────────────────────────────────────────────────
+    # ── Company ─
     path("companies/",          views.CompanyListCreateView.as_view(), name="admin-company-list"),
     path("companies/<int:pk>/", views.CompanyDetailView.as_view(),     name="admin-company-detail"),
 
-    # ── Location ──────────────────────────────────────────────────────────
+    # ── Location ─
     path("locations/",          views.LocationListCreateView.as_view(),  name="admin-location-list"),
     path("locations/<int:pk>/", views.LocationDetailView.as_view(),      name="admin-location-detail"),
 
-    # ── Department ────────────────────────────────────────────────────────
+    # ── Department ─
     path("departments/",          views.DepartmentListCreateView.as_view(),  name="admin-department-list"),
     path("departments/<int:pk>/", views.DepartmentDetailView.as_view(),      name="admin-department-detail"),
 
-    # ── Plan ──────────────────────────────────────────────────────────────
+    # ── Plan ──
     path("plans/",          views.PlanListCreateView.as_view(),  name="admin-plan-list"),
     path("plans/<int:pk>/", views.PlanDetailView.as_view(),      name="admin-plan-detail"),
 
-    # ── UserProfile ───────────────────────────────────────────────────────
+    # ── UserProfile ──
     path("user-profiles/",          views.UserProfileListView.as_view(),   name="admin-userprofile-list"),
     path("user-profiles/<int:pk>/", views.UserProfileDetailView.as_view(), name="admin-userprofile-detail"),
 
-    # ── Question ──────────────────────────────────────────────────────────
+    # ── Question ──
     path("questions/",          views.QuestionListCreateView.as_view(),  name="admin-question-list"),
     path("questions/<int:pk>/", views.QuestionDetailView.as_view(),      name="admin-question-detail"),
 
-    # ── QuestionOption ────────────────────────────────────────────────────
+    # ── QuestionOption ──
     path("question-options/",          views.QuestionOptionListCreateView.as_view(),  name="admin-option-list"),
     path("question-options/<int:pk>/", views.QuestionOptionDetailView.as_view(),      name="admin-option-detail"),
    
