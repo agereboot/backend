@@ -12,7 +12,15 @@ RoleSerializer,
     PlanSerializer,
     UserProfileSerializer, UserProfileUpdateSerializer,
     QuestionSerializer, QuestionWriteSerializer,
-    QuestionOptionSerializer,)
+    QuestionOptionSerializer,BiomarkerDefinitionSerializer, BiomarkerResultSerializer,
+    BulkBiomarkerIngestSerializer, ManualEntrySerializer,
+    ManualEntryCreateSerializer, ValidateEntrySerializer,
+    CognitiveTemplateSerializer, CognitiveResultSerializer,
+    CognitiveSubmitSerializer, WearableDeviceSerializer,
+    WearableConnectionSerializer, WearableSyncSerializer,
+    LabUploadSerializer, LabTextUploadSerializer,
+    ReportRepositorySerializer, ReportUploadSerializer,
+    CompareSerializer,)
 from allauth.socialaccount.models import SocialAccount
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.shortcuts import redirect
@@ -22,7 +30,11 @@ from .utils import generate_otp, send_otp_email, otp_expiry_time
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from .models import (UserProfile,Question,UserAnswer,Role,Location,
- Department, Plan, EmployeePlan,Challenge,ChallengeParticipant,Company,QuestionOption)
+ Department, Plan, EmployeePlan,Challenge,
+ ChallengeParticipant,Company,QuestionOption,CreditTransaction,BiomarkerDefinition, BiomarkerResult, ManualEntry,
+    BiomarkerCorrelation, WearableDevice, WearableConnection,
+    CognitiveAssessmentTemplate, CognitiveAssessmentResult,
+    ReportRepository, PillarConfig,)
 import pandas as pd
 from datetime import timedelta
 from .helpers import (
@@ -41,6 +53,19 @@ from django.db.models import Count, Q, Avg
 from django.shortcuts import get_object_or_404
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
+import re
+import uuid
+import random
+from datetime import datetime, timezone
+
+from django.db.models import Q
+from django.utils import timezone as dj_timezone
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+
 
 
 
@@ -207,7 +232,7 @@ def login_view(request):
             "username": user.username,
             "email": user.email,
             "role_id": profile.role.id if profile.role else None,
-            "role_name": profile.role.name if profile.role else None,
+            "role": profile.role.name if profile.role else None,
             "access_token": str(refresh.access_token),
             "refresh_token": str(refresh),
         }
@@ -546,7 +571,8 @@ def bulk_employee_upload(request):
             if is_new_user:
                 try:
                     token = generate_reset_token(user)
-                    reset_link = f"http://localhost:3000/reset-password/{token}"
+                    # reset_link = f"http://localhost:3000/reset-password/{token}"
+                    reset_link = f"http://localhost:3000/forgot-password/{token}"
                     send_reset_password_email(user, temp_password, reset_link)
                 except Exception as e:
                     email_errors.append({
@@ -1529,3 +1555,891 @@ class QuestionOptionDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = QuestionOption.objects.select_related("question").all()
     serializer_class = QuestionOptionSerializer
     permission_classes = [IsAdminUser]
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def purchase_credits_mock(request):
+    amount = int(request.data.get('amount', 100))
+    profile = request.user.profile  # ✅
+
+    profile.credits += amount
+    profile.save(update_fields=["credits"])
+
+    CreditTransaction.objects.create(
+        user=request.user,
+        type="purchase",
+        amount=amount,
+        description="Credits Purchased"
+    )
+
+    return Response({
+        "status": "success",
+        "new_balance": profile.credits
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_credits(request):
+    user = request.user
+    profile = user.profile  # ✅ IMPORTANT
+
+    transactions = profile.user.credit_transactions.all().order_by('-created_at')
+
+    return Response({
+        "available": profile.credits,
+        "transactions": [
+            {
+                "type": t.type,
+                "amount": t.amount,
+                "description": t.description,
+                "timestamp": t.created_at.isoformat()
+            } for t in transactions
+        ]
+    })
+    user = request.user
+
+    transactions = user.credit_transactions.all().order_by('-created_at')[:10]
+
+    return Response({
+        "available": user.credits,
+        "transactions": [
+            {
+                "type": t.type,
+                "amount": t.amount,
+                "description": t.description,
+                "timestamp": t.created_at.isoformat()
+            } for t in transactions
+        ]
+    })
+
+"""
+biomarkers/views.py
+
+All biomarker-related API views.  Each endpoint mirrors the FastAPI
+routes in the original spec, but everything is driven from the DB
+rather than hard-coded dicts.
+"""
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _biomarker_status(value, defn: BiomarkerDefinition):
+    """Return 'green' | 'yellow' | 'red' for a given value."""
+    lo, hi = defn.optimal_low or 0, defn.optimal_high or 100
+    d = defn.direction
+    if d == "lower_better":
+        return "green" if value <= hi else ("yellow" if value <= hi * 1.3 else "red")
+    if d == "higher_better":
+        return "green" if value >= lo else ("yellow" if value >= lo * 0.7 else "red")
+    # optimal_range
+    return "green" if lo <= value <= hi else ("yellow" if lo * 0.8 <= value <= hi * 1.2 else "red")
+
+
+def _is_red(value, defn: BiomarkerDefinition):
+    lo, hi = defn.optimal_low or 0, defn.optimal_high or 100
+    d = defn.direction
+    if d == "lower_better":  return value > hi * 1.3
+    if d == "higher_better": return value < lo * 0.7
+    return value < lo * 0.8 or value > hi * 1.2
+
+
+def _ingest_bulk(user, biomarkers_data):
+    """
+    Core ingest helper.  `biomarkers_data` is a list of dicts:
+      [{biomarker_code, value, source, collected_at (opt)}, ...]
+    Returns list of saved BiomarkerResult instances.
+    """
+    results = []
+    codes   = {b["biomarker_code"] for b in biomarkers_data}
+    defns   = {d.code: d for d in BiomarkerDefinition.objects.filter(code__in=codes)}
+
+    for bm in biomarkers_data:
+        defn = defns.get(bm["biomarker_code"])
+        if not defn:
+            continue
+        collected = bm.get("collected_at") or dj_timezone.now()
+        obj = BiomarkerResult.objects.create(
+            user=user,
+            biomarker=defn,
+            value=bm["value"],
+            source=bm.get("source", "MANUAL"),
+            collected_at=collected,
+        )
+        results.append(obj)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1.  Bulk ingest
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def ingest_biomarkers(request):
+    """POST /biomarkers/ingest"""
+    ser = BulkBiomarkerIngestSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    saved = _ingest_bulk(request.user, ser.validated_data["biomarkers"])
+    return Response({
+        "ingested": len(saved),
+        "results":  BiomarkerResultSerializer(saved, many=True).data,
+    }, status=status.HTTP_201_CREATED)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2.  Definitions
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+def get_biomarker_definitions(request):
+    """GET /biomarkers/definitions/all  – public, no auth required"""
+    defs = BiomarkerDefinition.objects.all()
+    return Response({"definitions": BiomarkerDefinitionSerializer(defs, many=True).data})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3.  Compare two biomarkers
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def compare_biomarkers(request):
+    """POST /biomarkers/compare  {code_a, code_b}"""
+    ser = CompareSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    code_a, code_b = ser.validated_data["code_a"], ser.validated_data["code_b"]
+
+    try:
+        defn_a = BiomarkerDefinition.objects.get(code=code_a)
+        defn_b = BiomarkerDefinition.objects.get(code=code_b)
+    except BiomarkerDefinition.DoesNotExist:
+        return Response({"error": "Invalid biomarker code"}, status=400)
+
+    uid = request.user.id
+
+    def _history(code):
+        rows = (BiomarkerResult.objects
+                .filter(user_id=uid, biomarker__code=code)
+                .order_by("collected_at")[:50])
+        return [{"date": r.collected_at.date().isoformat(), "value": r.value} for r in rows]
+
+    # correlation lookup (try both orderings)
+    corr = (BiomarkerCorrelation.objects
+            .filter(Q(biomarker_a__code=code_a, biomarker_b__code=code_b) |
+                    Q(biomarker_a__code=code_b, biomarker_b__code=code_a))
+            .first())
+
+    correlation = None
+    if corr:
+        correlation = {"strength": corr.strength, "direction": corr.direction,
+                       "insight": corr.insight}
+
+    def _defn_dict(defn, hist):
+        return {"code": defn.code, "name": defn.name, "unit": defn.unit,
+                "pillar": defn.pillar, "optimal_low": defn.optimal_low,
+                "optimal_high": defn.optimal_high, "direction": defn.direction,
+                "history": hist}
+
+    return Response({
+        "biomarker_a": _defn_dict(defn_a, _history(code_a)),
+        "biomarker_b": _defn_dict(defn_b, _history(code_b)),
+        "correlation": correlation,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4.  Pillar dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def pillar_dashboard(request):
+    """GET /biomarkers/pillar-dashboard"""
+    uid = request.user.id
+
+    all_bms = list(BiomarkerResult.objects
+                   .filter(user_id=uid)
+                   .select_related("biomarker")
+                   .order_by("-collected_at")[:500])
+
+    latest_by_code  = {}
+    history_by_code = {}
+    for bm in all_bms:
+        code = bm.biomarker.code
+        if code not in latest_by_code:
+            latest_by_code[code] = bm
+        if code not in history_by_code:
+            history_by_code[code] = []
+        if len(history_by_code[code]) < 10:
+            history_by_code[code].append(bm)
+
+    pillar_cfgs = {p.code: p for p in PillarConfig.objects.all()}
+    pillars     = {}
+
+    for defn in BiomarkerDefinition.objects.select_related().all():
+        pillar = defn.pillar
+        if pillar not in pillars:
+            cfg = pillar_cfgs.get(pillar)
+            pillars[pillar] = {
+                "code": pillar,
+                "name":  cfg.name  if cfg else pillar,
+                "color": cfg.color if cfg else "#7B35D8",
+                "biomarkers": [], "red": 0, "yellow": 0, "green": 0,
+            }
+
+        bm = latest_by_code.get(defn.code)
+        if bm:
+            s = _biomarker_status(bm.value, defn)
+            history = [{"value": round(h.value, 2),
+                        "date":  h.collected_at.date().isoformat()}
+                       for h in reversed(history_by_code.get(defn.code, []))]
+            pillars[pillar]["biomarkers"].append({
+                "code": defn.code, "name": defn.name,
+                "value": round(bm.value, 2), "unit": defn.unit,
+                "domain": defn.domain,
+                "optimal_low": defn.optimal_low, "optimal_high": defn.optimal_high,
+                "direction": defn.direction, "status": s,
+                "history": history, "data_source": defn.data_source,
+            })
+            pillars[pillar][s] += 1
+        else:
+            pillars[pillar]["biomarkers"].append({
+                "code": defn.code, "name": defn.name,
+                "value": None, "unit": defn.unit,
+                "domain": defn.domain,
+                "optimal_low": defn.optimal_low, "optimal_high": defn.optimal_high,
+                "direction": defn.direction, "status": "missing",
+                "history": [], "data_source": defn.data_source,
+            })
+
+    return Response({"pillars": pillars})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.  Predictions
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def biomarker_predictions(request):
+    """GET /biomarkers/predictions"""
+    from django.db.models import Count
+    uid  = request.user.id
+    user = request.user
+
+    # Compliance score (mirrored from FastAPI logic)
+    med_logs_count         = getattr(user, "medication_logs",      None)
+    nutrition_logs_count   = getattr(user, "nutrition_logs",       None)
+    daily_challenges_done  = getattr(user, "daily_challenges",     None)
+    ml = med_logs_count.count()         if med_logs_count        else 0
+    nl = nutrition_logs_count.count()   if nutrition_logs_count  else 0
+    dc = daily_challenges_done.filter(completed=True).count() if daily_challenges_done else 0
+    compliance_score = min(100, ml * 5 + nl * 3 + dc * 8)
+
+    all_bms = list(BiomarkerResult.objects
+                   .filter(user_id=uid)
+                   .select_related("biomarker")
+                   .order_by("-collected_at")[:500])
+
+    latest_by_code  = {}
+    history_by_code = {}
+    for bm in all_bms:
+        code = bm.biomarker.code
+        if code not in latest_by_code:
+            latest_by_code[code] = bm
+        if code not in history_by_code:
+            history_by_code[code] = []
+        if len(history_by_code[code]) < 10:
+            history_by_code[code].append(bm)
+
+    predictions = []
+    cf = compliance_score / 100.0
+
+    for defn in BiomarkerDefinition.objects.all():
+        bm = latest_by_code.get(defn.code)
+        if not bm or not _is_red(bm.value, defn):
+            continue
+
+        val     = bm.value
+        history = [h.value for h in history_by_code.get(defn.code, [])]
+        trend   = (history[0] - history[-1]) / len(history) if len(history) >= 2 else 0
+        lo, hi  = defn.optimal_low or 0, defn.optimal_high or 100
+        d       = defn.direction
+
+        if d == "lower_better":
+            imp = -abs(trend) * cf * 0.5
+            p1, p2, p3 = max(0, val + imp*30), max(0, val + imp*60), max(0, val + imp*90)
+        elif d == "higher_better":
+            imp = abs(trend) * cf * 0.5
+            p1, p2, p3 = val + imp*30, val + imp*60, val + imp*90
+        else:
+            mid = (lo + hi) / 2
+            mv  = (mid - val) * cf * 0.1
+            p1, p2, p3 = val + mv, val + mv*2, val + mv*3
+
+        hist_data = [{"value": round(h.value, 2),
+                      "date":  h.collected_at.date().isoformat()}
+                     for h in reversed(history_by_code.get(defn.code, []))]
+
+        predictions.append({
+            "code": defn.code, "name": defn.name,
+            "unit": defn.unit, "current": round(val, 2),
+            "optimal_low": lo, "optimal_high": hi, "direction": d,
+            "predictions": [
+                {"month": 1, "value": round(p1, 2)},
+                {"month": 2, "value": round(p2, 2)},
+                {"month": 3, "value": round(p3, 2)},
+            ],
+            "compliance_score": compliance_score,
+            "history": hist_data,
+        })
+
+    return Response({"predictions": predictions, "compliance_score": compliance_score})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.  Cognitive assessments
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_cognitive_assessments(request):
+    """GET /biomarkers/cognitive-assessments"""
+    templates = CognitiveAssessmentTemplate.objects.all()
+    completed = CognitiveAssessmentResult.objects.filter(
+        user=request.user).select_related("template").order_by("-completed_at")[:50]
+
+    return Response({
+        "assessments": CognitiveTemplateSerializer(templates, many=True).data,
+        "completed":   CognitiveResultSerializer(completed, many=True).data,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def submit_cognitive_assessment(request):
+    """POST /biomarkers/cognitive-assessments/submit"""
+    ser = CognitiveSubmitSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    try:
+        template = CognitiveAssessmentTemplate.objects.get(
+            code=ser.validated_data["assessment_code"])
+    except CognitiveAssessmentTemplate.DoesNotExist:
+        return Response({"error": "Invalid assessment code"}, status=400)
+
+    max_s = template.max_score
+    score = ser.validated_data["total_score"]
+    pct   = (score / max_s * 100) if max_s else 0
+    severity = ("normal" if pct <= 20 else
+                "mild"   if pct <= 40 else
+                "moderate" if pct <= 60 else "severe")
+
+    result = CognitiveAssessmentResult.objects.create(
+        user=request.user, template=template,
+        answers=ser.validated_data["answers"],
+        total_score=score, max_score=max_s,
+        percentage=round(pct, 1), severity=severity,
+    )
+    return Response(CognitiveResultSerializer(result).data, status=201)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.  Manual entry
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_manual_entry(request):
+    """POST /biomarkers/manual-entry"""
+    ser = ManualEntryCreateSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    try:
+        defn = BiomarkerDefinition.objects.get(code=ser.validated_data["biomarker_code"])
+    except BiomarkerDefinition.DoesNotExist:
+        return Response({"error": "Unknown biomarker code"}, status=400)
+
+    val     = ser.validated_data["value"]
+    lo, hi  = defn.optimal_low or 0, defn.optimal_high or 100
+    flag    = "normal" if lo * 0.3 <= val <= hi * 3 else "flagged_out_of_range"
+
+    entry = ManualEntry.objects.create(
+        user=request.user,
+        biomarker=defn,
+        value=val,
+        notes=ser.validated_data.get("notes", ""),
+        entered_by=request.user.get_full_name() or request.user.username,
+        entered_by_role=getattr(getattr(request.user, "profile", None), "role", None) or "employee",
+        system_validation=flag,
+    )
+    return Response(ManualEntrySerializer(entry).data, status=201)
+
+
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def validate_manual_entry(request, entry_id):
+    """PUT /biomarkers/manual-entry/<entry_id>/validate"""
+    ser = ValidateEntrySerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    try:
+        entry = ManualEntry.objects.select_related("biomarker").get(id=entry_id)
+    except ManualEntry.DoesNotExist:
+        return Response({"error": "Entry not found"}, status=404)
+
+    approved = ser.validated_data["approved"]
+
+    if approved:
+        _ingest_bulk(entry.user, [{
+            "biomarker_code": entry.biomarker.code,
+            "value":          entry.value,
+            "source":         "VALIDATED_MANUAL",
+            "collected_at":   entry.created_at,
+        }])
+
+    entry.clinician_validation = "approved" if approved else "rejected"
+    entry.clinician            = request.user
+    entry.clinician_notes      = ser.validated_data.get("notes", "")
+    entry.status               = "validated" if approved else "rejected"
+    entry.validated_at         = dj_timezone.now()
+    entry.save()
+
+    return Response(ManualEntrySerializer(entry).data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_manual_entries(request):
+    """GET /biomarkers/manual-entries"""
+    uid     = request.user.id
+    entries = (ManualEntry.objects
+               .filter(Q(user_id=uid) | Q(clinician_id=uid))
+               .select_related("biomarker")
+               .order_by("-created_at")[:50])
+    return Response({"entries": ManualEntrySerializer(entries, many=True).data})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8.  Correlation matrix
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def correlation_matrix(request):
+    """GET /biomarkers/correlation-matrix"""
+    uid = request.user.id
+
+    all_bms = list(BiomarkerResult.objects
+                   .filter(user_id=uid)
+                   .select_related("biomarker")
+                   .order_by("-collected_at")[:500])
+
+    latest = {}
+    for bm in all_bms:
+        if bm.biomarker.code not in latest:
+            latest[bm.biomarker.code] = bm
+
+    red_codes = {code for code, bm in latest.items() if _is_red(bm.value, bm.biomarker)}
+
+    correlations  = []
+    cascade_impact = {}
+
+    for corr in BiomarkerCorrelation.objects.select_related("biomarker_a", "biomarker_b").all():
+        a, b = corr.biomarker_a.code, corr.biomarker_b.code
+        if a in red_codes or b in red_codes:
+            correlations.append({
+                "biomarker_a": a, "name_a": corr.biomarker_a.name,
+                "biomarker_b": b, "name_b": corr.biomarker_b.name,
+                "strength": corr.strength, "direction": corr.direction,
+                "insight": corr.insight,
+                "a_status": "red" if a in red_codes else "ok",
+                "b_status": "red" if b in red_codes else "ok",
+            })
+            cascade_impact[a] = cascade_impact.get(a, 0) + 1
+            cascade_impact[b] = cascade_impact.get(b, 0) + 1
+
+    best_target = None
+    if cascade_impact:
+        best_code = max(cascade_impact, key=cascade_impact.get)
+        defn      = BiomarkerDefinition.objects.get(code=best_code)
+        best_target = {
+            "code": best_code, "name": defn.name,
+            "connections": cascade_impact[best_code],
+            "recommendation": (f"Improving {defn.name} would positively impact "
+                               f"{cascade_impact[best_code]} other biomarkers."),
+        }
+
+    return Response({
+        "correlations":    correlations,
+        "red_biomarkers":  list(red_codes),
+        "cascade_impact":  cascade_impact,
+        "best_target":     best_target,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.  Benchmarking
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def biomarker_benchmarking(request):
+    """GET /biomarkers/benchmarking"""
+    from django.contrib.auth.models import User as DjangoUser
+    uid      = request.user.id
+    profile  = getattr(request.user, "profile", None)
+    user_age = getattr(profile, "age",  35)
+    user_sex = getattr(profile, "sex",  "M")
+    age_lo   = max(18, user_age - 10)
+    age_hi   = user_age + 10
+
+    user_bms = list(BiomarkerResult.objects
+                    .filter(user_id=uid)
+                    .select_related("biomarker")
+                    .order_by("-collected_at")[:500])
+    user_latest = {}
+    for bm in user_bms:
+        if bm.biomarker.code not in user_latest:
+            user_latest[bm.biomarker.code] = bm.value
+
+    # Build cohort from demo users (adapt query to your User model)
+    cohort_qs = DjangoUser.objects.filter(
+        profile__is_demo=True, profile__sex=user_sex,
+        profile__age__gte=age_lo, profile__age__lte=age_hi,
+    ).values_list("id", flat=True)
+    cohort_ids   = list(cohort_qs)
+    cohort_label = f"{user_sex}, Age {age_lo}-{age_hi}"
+
+    if len(cohort_ids) < 5:
+        cohort_ids   = list(DjangoUser.objects.filter(profile__is_demo=True)
+                            .values_list("id", flat=True))
+        cohort_label = "All Participants"
+
+    cohort_bms = list(BiomarkerResult.objects
+                      .filter(user_id__in=cohort_ids)
+                      .select_related("biomarker"))
+    cohort_by_code = {}
+    for bm in cohort_bms:
+        cohort_by_code.setdefault(bm.biomarker.code, []).append(bm.value)
+
+    benchmarks = []
+    for defn in BiomarkerDefinition.objects.all():
+        user_val    = user_latest.get(defn.code)
+        cohort_vals = sorted(cohort_by_code.get(defn.code, []))
+        if user_val is None or len(cohort_vals) < 3:
+            continue
+
+        below      = sum(1 for v in cohort_vals if v < user_val)
+        equal      = sum(1 for v in cohort_vals if v == user_val)
+        percentile = round(((below + equal * 0.5) / len(cohort_vals)) * 100, 1)
+
+        d = defn.direction
+        if d == "lower_better":
+            hp = round(100 - percentile, 1)
+        elif d == "higher_better":
+            hp = percentile
+        else:
+            lo, hi = defn.optimal_low or 0, defn.optimal_high or 100
+            mid    = (lo + hi) / 2
+            dist   = abs(user_val - mid) / max(abs(hi - lo), 1)
+            hp     = round(max(0, 100 - dist * 100), 1)
+
+        n    = len(cohort_vals)
+        mean = round(sum(cohort_vals) / n, 1)
+        p25  = cohort_vals[n // 4]
+        p75  = cohort_vals[3 * n // 4]
+
+        rating = ("excellent"     if hp >= 80 else
+                  "good"          if hp >= 60 else
+                  "average"       if hp >= 40 else
+                  "below_average" if hp >= 20 else "needs_attention")
+
+        benchmarks.append({
+            "code": defn.code, "name": defn.name,
+            "pillar": defn.pillar, "unit": defn.unit,
+            "user_value": round(user_val, 1),
+            "percentile": percentile, "health_percentile": hp,
+            "cohort_mean": mean, "cohort_p25": p25, "cohort_p75": p75,
+            "cohort_size": n, "direction": d, "rating": rating,
+        })
+
+    benchmarks.sort(key=lambda x: -x["health_percentile"])
+    overall = round(sum(b["health_percentile"] for b in benchmarks) / max(len(benchmarks), 1), 1)
+    strengths = [b for b in benchmarks if b["rating"] in ("excellent", "good")][:3]
+    improve   = [b for b in sorted(benchmarks, key=lambda x: x["health_percentile"])
+                 if b["rating"] in ("needs_attention", "below_average")][:3]
+
+    return Response({
+        "benchmarks": benchmarks, "cohort_label": cohort_label,
+        "cohort_size": len(cohort_ids),
+        "overall_health_percentile": overall,
+        "top_strengths": strengths, "areas_to_improve": improve,
+        "user_age": user_age, "user_sex": user_sex,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. Get user biomarkers
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_user_biomarkers(request, user_id):
+    """GET /biomarkers/<user_id>"""
+    results = (BiomarkerResult.objects
+               .filter(user_id=user_id)
+               .select_related("biomarker")
+               .order_by("-ingested_at")[:500])
+    return Response({
+        "biomarkers": BiomarkerResultSerializer(results, many=True).data,
+        "count": results.count(),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. Wearable devices
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_wearable_devices(request):
+    """GET /wearable/devices"""
+    devices     = list(WearableDevice.objects.all())
+    connections = {c.device_id: c for c in
+                   WearableConnection.objects.filter(user=request.user)}
+
+    data = []
+    for d in devices:
+        item = WearableDeviceSerializer(d).data
+        item["status"] = "available"
+        conn = connections.get(d.device_id)
+        if conn:
+            item["status"]       = "connected"
+            item["connected_at"] = conn.connected_at
+            item["last_sync"]    = conn.last_sync
+        data.append(item)
+
+    return Response({"devices": data})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def connect_device(request, device_id):
+    """POST /wearable/connect/<device_id>"""
+    try:
+        device = WearableDevice.objects.get(device_id=device_id)
+    except WearableDevice.DoesNotExist:
+        return Response({"error": "Unsupported device"}, status=400)
+
+    conn, created = WearableConnection.objects.get_or_create(
+        user=request.user, device=device,
+        defaults={"metrics_enabled": device.metrics},
+    )
+    if not created:
+        return Response({"message": "Already connected",
+                         "connection": WearableConnectionSerializer(conn).data})
+
+    return Response({"message": "Device connected",
+                     "connection": WearableConnectionSerializer(conn).data}, status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def disconnect_device(request, device_id):
+    """POST /wearable/disconnect/<device_id>"""
+    deleted, _ = WearableConnection.objects.filter(
+        user=request.user, device__device_id=device_id).delete()
+    if not deleted:
+        return Response({"error": "Device not connected"}, status=404)
+    return Response({"message": "Device disconnected", "device": device_id})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def sync_wearable(request):
+    """POST /wearable/sync  {device: "oura"}"""
+    ser = WearableSyncSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    device_id = ser.validated_data["device"]
+
+    # Metric ranges per device (same as FastAPI original)
+    DEVICE_METRIC_RANGES = {
+        "oura":          {"hrv_rmssd": (25,60), "deep_sleep_pct": (10,25), "sleep_efficiency": (75,95), "recovery_score": (40,95)},
+        "apple_health":  {"resting_hr": (50,85), "hrv_rmssd": (20,55), "sleep_duration": (5.5,9), "vo2_max": (25,50)},
+        "google_health": {"resting_hr": (52,82), "sleep_duration": (5.5,8.5), "spo2": (94,99)},
+        "garmin":        {"vo2_max": (25,55), "resting_hr": (48,80), "sleep_duration": (5,9), "deep_sleep_pct": (8,25)},
+        "whoop":         {"hrv_rmssd": (22,65), "recovery_score": (30,98), "sleep_efficiency": (70,96)},
+        "fitbit":        {"resting_hr": (55,85), "sleep_duration": (5,9), "sleep_efficiency": (70,95)},
+        "withings":      {"body_fat_pct": (10,35)},
+        "samsung_health":{"resting_hr": (52,84), "spo2": (94,99), "sleep_duration": (5,9)},
+        "polar":         {"resting_hr": (48,78), "hrv_rmssd": (25,60), "vo2_max": (28,55)},
+        "amazfit":       {"resting_hr": (50,82), "spo2": (94,99), "sleep_duration": (5.5,9)},
+        "coros":         {"resting_hr": (48,78), "hrv_rmssd": (22,58), "vo2_max": (26,52)},
+    }
+
+    metrics = DEVICE_METRIC_RANGES.get(device_id, DEVICE_METRIC_RANGES["oura"])
+    bm_data = [
+        {"biomarker_code": code, "value": round(random.uniform(lo, hi), 1),
+         "source": f"WEARABLE_{device_id.upper()}"}
+        for code, (lo, hi) in metrics.items()
+    ]
+    saved = _ingest_bulk(request.user, bm_data)
+
+    # update last_sync
+    WearableConnection.objects.filter(
+        user=request.user, device__device_id=device_id
+    ).update(last_sync=dj_timezone.now())
+
+    return Response({
+        "device": device_id, "synced": True,
+        "ingested": len(saved),
+        "results": BiomarkerResultSerializer(saved, many=True).data,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_wearable_connections(request):
+    """GET /wearable/connections"""
+    conns = WearableConnection.objects.filter(user=request.user).select_related("device")
+    return Response({"connections": WearableConnectionSerializer(conns, many=True).data})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. Lab upload
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def upload_lab_results(request):
+    """POST /lab/upload"""
+    ser = LabUploadSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    lab_name = ser.validated_data["lab_name"]
+    results  = ser.validated_data["results"]
+
+    valid_codes = set(BiomarkerDefinition.objects.filter(
+        code__in=results.keys()).values_list("code", flat=True))
+
+    if not valid_codes:
+        return Response({"error": "No valid biomarkers in lab results"}, status=400)
+
+    bm_data = [
+        {"biomarker_code": code, "value": results[code],
+         "source": f"LAB_{lab_name.upper().replace(' ', '_')}"}
+        for code in valid_codes
+    ]
+    saved = _ingest_bulk(request.user, bm_data)
+    return Response({
+        "lab": lab_name, "processed": True,
+        "ingested": len(saved),
+        "results": BiomarkerResultSerializer(saved, many=True).data,
+    }, status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def upload_lab_text(request):
+    """POST /lab/upload-text  {text: "..."}"""
+    ser = LabTextUploadSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    text_lower = ser.validated_data["text"].lower()
+    patterns = {
+        "fasting_glucose": [r"(?:fasting\s+)?glucose[\s:]+(\d+\.?\d*)", r"fbs[\s:]+(\d+\.?\d*)"],
+        "hba1c":           [r"hba1c[\s:]+(\d+\.?\d*)", r"glycated\s+hemo[\w]*[\s:]+(\d+\.?\d*)"],
+        "ldl_c":           [r"ldl[\s\-c:]+(\d+\.?\d*)", r"ldl\s+cholesterol[\s:]+(\d+\.?\d*)"],
+        "hdl_c":           [r"hdl[\s\-c:]+(\d+\.?\d*)", r"hdl\s+cholesterol[\s:]+(\d+\.?\d*)"],
+        "triglycerides":   [r"triglycerides?[\s:]+(\d+\.?\d*)", r"tg[\s:]+(\d+\.?\d*)"],
+        "hscrp":           [r"(?:hs[\-]?)?crp[\s:]+(\d+\.?\d*)", r"c[\-\s]?reactive[\s:]+(\d+\.?\d*)"],
+        "vitamin_d":       [r"vitamin\s*d[\s:]+(\d+\.?\d*)", r"25[\-\s]?oh[\-\s]?d[\s:]+(\d+\.?\d*)"],
+        "resting_hr":      [r"(?:resting\s+)?heart\s+rate[\s:]+(\d+\.?\d*)", r"pulse[\s:]+(\d+\.?\d*)"],
+    }
+
+    extracted = {}
+    for code, pats in patterns.items():
+        for pat in pats:
+            m = re.search(pat, text_lower)
+            if m:
+                try:
+                    extracted[code] = float(m.group(1))
+                except ValueError:
+                    pass
+                break
+
+    if not extracted:
+        return Response({"parsed": 0,
+                         "message": "No biomarkers detected. Try structured format.",
+                         "extracted": {}})
+
+    valid_codes = set(BiomarkerDefinition.objects.filter(
+        code__in=extracted.keys()).values_list("code", flat=True))
+
+    bm_data = [{"biomarker_code": c, "value": v, "source": "LAB_OCR"}
+               for c, v in extracted.items() if c in valid_codes]
+    saved = _ingest_bulk(request.user, bm_data)
+
+    return Response({
+        "parsed": len(extracted), "extracted": extracted,
+        "ingested": len(saved),
+        "results": BiomarkerResultSerializer(saved, many=True).data,
+    }, status=201)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 13. Report repository
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_report_repository(request):
+    """GET /reports/repository"""
+    reports = (ReportRepository.objects
+               .filter(user=request.user)
+               .order_by("-uploaded_at")[:100])
+    return Response({
+        "reports": ReportRepositorySerializer(reports, many=True).data,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def upload_report(request):
+    """POST /reports/upload"""
+    ser = ReportUploadSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    content       = ser.validated_data.get("content", "")
+    is_hps_report = ser.validated_data.get("is_hps_report", False)
+
+    report_type       = "lab_report" if is_hps_report else "other"
+    title             = "Lab Report" if is_hps_report else "General Report"
+    report_date       = dj_timezone.now()
+    extracted_params  = []
+
+    # Optional: call an LLM to parse the report content if is_hps_report
+    # (wire up your own LLM client here — same logic as the FastAPI version)
+
+    report = ReportRepository.objects.create(
+        user=request.user,
+        report_type=report_type,
+        title=title,
+        is_hps_report=is_hps_report,
+        uploaded_by=request.user.get_full_name() or request.user.username,
+        uploaded_by_role=getattr(getattr(request.user, "profile", None), "role", "employee"),
+        report_date=report_date,
+        content_preview=content[:200],
+        size_bytes=len(content),
+        parameters_extracted=len(extracted_params),
+        extracted_parameters=extracted_params,
+    )
+    return Response(ReportRepositorySerializer(report).data, status=201)

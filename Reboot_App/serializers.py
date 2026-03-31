@@ -7,7 +7,13 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from .models import (
     Role, Company, Location, Department, Plan,
-    UserProfile, Question, QuestionOption,UserAnswer
+    UserProfile, Question, QuestionOption,UserAnswer,BiomarkerDefinition, BiomarkerResult, ManualEntry,
+    BiomarkerCorrelation, WearableDevice, WearableConnection,
+    CognitiveAssessmentTemplate, CognitiveAssessmentResult,
+    ReportRepository, PillarConfig,
+    HPSScore, SupportTicket, CCAssignment, CCAlert, CCSession, CCProtocol,
+    Appointment, MemberMedicalHistory, VitalsLog, EMREncounter,
+    NutritionLog, NutritionPlan
 )
 
 class RegisterSerializer(serializers.Serializer):
@@ -224,3 +230,235 @@ class QuestionWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
         fields = ["id", "text", "question_type", "order", "is_required"]
+
+
+class BiomarkerDefinitionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = BiomarkerDefinition
+        fields = ["code", "name", "domain", "pillar", "unit", "direction",
+                  "optimal_low", "optimal_high", "data_source"]
+
+
+class BiomarkerResultSerializer(serializers.ModelSerializer):
+    biomarker_code = serializers.CharField(source="biomarker.code", read_only=True)
+    name           = serializers.CharField(source="biomarker.name", read_only=True)
+    unit           = serializers.CharField(source="biomarker.unit", read_only=True)
+    domain         = serializers.CharField(source="biomarker.domain", read_only=True)
+    pillar         = serializers.CharField(source="biomarker.pillar", read_only=True)
+
+    class Meta:
+        model  = BiomarkerResult
+        fields = ["id", "biomarker_code", "name", "value", "unit",
+                  "domain", "pillar", "source", "collected_at", "ingested_at"]
+
+
+# ── Ingest ──────────────────────────────────────────────────────────────────
+
+class SingleBiomarkerIngestSerializer(serializers.Serializer):
+    biomarker_code = serializers.CharField()
+    value          = serializers.FloatField()
+    source         = serializers.CharField(default="MANUAL")
+    collected_at   = serializers.DateTimeField(required=False, allow_null=True)
+
+
+class BulkBiomarkerIngestSerializer(serializers.Serializer):
+    biomarkers = SingleBiomarkerIngestSerializer(many=True)
+
+
+# ── Manual Entry ─────────────────────────────────────────────────────────────
+
+class ManualEntrySerializer(serializers.ModelSerializer):
+    biomarker_code = serializers.CharField(source="biomarker.code", read_only=True)
+    biomarker_name = serializers.CharField(source="biomarker.name", read_only=True)
+    unit           = serializers.CharField(source="biomarker.unit", read_only=True)
+
+    class Meta:
+        model  = ManualEntry
+        fields = ["id", "biomarker_code", "biomarker_name", "value", "unit",
+                  "notes", "entered_by", "entered_by_role",
+                  "system_validation", "clinician_validation",
+                  "status", "created_at", "validated_at",
+                  "clinician_notes"]
+
+
+class ManualEntryCreateSerializer(serializers.Serializer):
+    biomarker_code = serializers.CharField()
+    value          = serializers.FloatField()
+    notes          = serializers.CharField(required=False, allow_blank=True)
+
+
+class ValidateEntrySerializer(serializers.Serializer):
+    approved = serializers.BooleanField()
+    notes    = serializers.CharField(required=False, allow_blank=True)
+
+
+# ── Cognitive ─────────────────────────────────────────────────────────────────
+
+class CognitiveTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = CognitiveAssessmentTemplate
+        fields = "__all__"
+
+
+class CognitiveResultSerializer(serializers.ModelSerializer):
+    assessment_code = serializers.CharField(source="template.code", read_only=True)
+    assessment_name = serializers.CharField(source="template.name", read_only=True)
+
+    class Meta:
+        model  = CognitiveAssessmentResult
+        fields = ["id", "assessment_code", "assessment_name", "answers",
+                  "total_score", "max_score", "percentage", "severity", "completed_at"]
+
+
+class CognitiveSubmitSerializer(serializers.Serializer):
+    assessment_code = serializers.CharField()
+    answers         = serializers.ListField(child=serializers.IntegerField())
+    total_score     = serializers.IntegerField()
+
+
+# ── Wearable ─────────────────────────────────────────────────────────────────
+
+class WearableDeviceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = WearableDevice
+        fields = ["device_id", "name", "category", "icon", "metrics"]
+
+
+class WearableConnectionSerializer(serializers.ModelSerializer):
+    device_name = serializers.CharField(source="device.name", read_only=True)
+    category    = serializers.CharField(source="device.category", read_only=True)
+
+    class Meta:
+        model  = WearableConnection
+        fields = ["id", "device_id", "device_name", "category",
+                  "connected_at", "last_sync", "status", "mode", "metrics_enabled"]
+
+
+class WearableSyncSerializer(serializers.Serializer):
+    device = serializers.CharField()
+
+
+# ── Lab ───────────────────────────────────────────────────────────────────────
+
+class LabUploadSerializer(serializers.Serializer):
+    lab_name = serializers.CharField()
+    results  = serializers.DictField(child=serializers.FloatField())   # {code: value}
+
+
+class LabTextUploadSerializer(serializers.Serializer):
+    text = serializers.CharField()
+
+
+# ── Reports ───────────────────────────────────────────────────────────────────
+
+class ReportRepositorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = ReportRepository
+        fields = ["id", "report_type", "title", "is_hps_report",
+                  "uploaded_by", "uploaded_by_role", "uploaded_at",
+                  "report_date", "content_preview", "size_bytes",
+                  "privacy_level", "parameters_extracted", "extracted_parameters"]
+
+
+class ReportUploadSerializer(serializers.Serializer):
+    content       = serializers.CharField(required=False, allow_blank=True)
+    is_hps_report = serializers.BooleanField(default=False)
+
+
+# ── Compare ───────────────────────────────────────────────────────────────────
+
+class CompareSerializer(serializers.Serializer):
+    code_b = serializers.CharField()
+
+# ──────────────────────────────────────────────
+# HPS & Analytics
+# ──────────────────────────────────────────────
+
+class HPSScoreSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HPSScore
+        fields = "__all__"
+        read_only_fields = ["id", "timestamp", "audit_hash"]
+
+# ──────────────────────────────────────────────
+# Support & Ticketing
+# ──────────────────────────────────────────────
+
+class SupportTicketSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SupportTicket
+        fields = "__all__"
+        read_only_fields = ["created_at", "updated_at", "resolved_at"]
+
+# ──────────────────────────────────────────────
+# Care Coordination (CC)
+# ──────────────────────────────────────────────
+
+class CCAssignmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CCAssignment
+        fields = "__all__"
+        read_only_fields = ["id", "assigned_at"]
+
+class CCAlertSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CCAlert
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+class CCSessionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CCSession
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+class CCProtocolSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CCProtocol
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+# ──────────────────────────────────────────────
+# EMR & Appointments
+# ──────────────────────────────────────────────
+
+class AppointmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Appointment
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+class MemberMedicalHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MemberMedicalHistory
+        fields = "__all__"
+        read_only_fields = ["updated_at"]
+
+class VitalsLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VitalsLog
+        fields = "__all__"
+        read_only_fields = ["id", "recorded_at"]
+
+class EMREncounterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EMREncounter
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+# ──────────────────────────────────────────────
+# Nutrition
+# ──────────────────────────────────────────────
+
+class NutritionLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NutritionLog
+        fields = "__all__"
+        read_only_fields = ["id", "logged_at"]
+
+class NutritionPlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NutritionPlan
+        fields = "__all__"
+        read_only_fields = ["generated_at"]
+
