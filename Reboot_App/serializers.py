@@ -2,18 +2,22 @@ from django.contrib.auth.models import User
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth import authenticate
-from rest_framework import serializers
-from django.contrib.auth.models import User
-from django.contrib.auth.password_validation import validate_password
+
 from .models import (
     Role, Company, Location, Department, Plan,
-    UserProfile, Question, QuestionOption,UserAnswer,BiomarkerDefinition, BiomarkerResult, ManualEntry,
+    UserProfile, Question, QuestionOption, UserAnswer, BiomarkerDefinition, BiomarkerResult, ManualEntry,
     BiomarkerCorrelation, WearableDevice, WearableConnection,
     CognitiveAssessmentTemplate, CognitiveAssessmentResult,
     ReportRepository, PillarConfig,
     HPSScore, SupportTicket, CCAssignment, CCAlert, CCSession, CCProtocol,
     Appointment, MemberMedicalHistory, VitalsLog, EMREncounter,
-    NutritionLog, NutritionPlan
+    NutritionLog, NutritionPlan, CCPrescription, CarePlan, CCMessage, 
+    CCOverrideAudit, CCReferral, NFLETask, Escalation, VideoConsultation, Notification,
+    LabOrder, LabPartner, LabPanel, Phlebotomist, SampleBooking, TelehealthSession,
+    LongevityProtocol, OutcomeCycle, HealthBrief,
+    OrganSystem, AppointmentService, MedicalCondition, MedicationLog, RefillRequest, SOSAlert, Medication,
+    Medication, EMRAllergy, DiagnosticOrder, DiagnosticCatalog,
+    LabIngestionReport
 )
 
 class RegisterSerializer(serializers.Serializer):
@@ -360,6 +364,14 @@ class ReportRepositorySerializer(serializers.ModelSerializer):
                   "privacy_level", "parameters_extracted", "extracted_parameters"]
 
 
+class LabIngestionReportSerializer(serializers.ModelSerializer):
+    patient_username = serializers.CharField(source="patient.username", read_only=True)
+
+    class Meta:
+        model = LabIngestionReport
+        fields = "__all__"
+
+
 class ReportUploadSerializer(serializers.Serializer):
     content       = serializers.CharField(required=False, allow_blank=True)
     is_hps_report = serializers.BooleanField(default=False)
@@ -375,10 +387,101 @@ class CompareSerializer(serializers.Serializer):
 # ──────────────────────────────────────────────
 
 class HPSScoreSerializer(serializers.ModelSerializer):
+    user_id = serializers.ReadOnlyField(source="user.id")
+    
     class Meta:
         model = HPSScore
         fields = "__all__"
-        read_only_fields = ["id", "timestamp", "audit_hash"]
+        read_only_field = ["id", "timestamp", "audit_hash"]
+
+    def to_representation(self, instance):
+        from .hps_engine.normative import PILLAR_CONFIG
+        from .hps_engine.scoring import get_performance_tier, get_alert_level
+        
+        rep = super().to_representation(instance)
+        
+        # 1. Map verbose pillars to rich short-key objects
+        pillar_map = {
+            "biological_resilience": "BR",
+            "physical_fitness": "PF",
+            "cognitive_health": "CA",
+            "sleep_recovery": "SR",
+            "behaviour_lifestyle": "BL"
+        }
+        
+        raw_pillars = instance.pillars or {}
+        rich_pillars = {}
+        pillar_pcts = {}
+        for verbose_key, short_key in pillar_map.items():
+            config = PILLAR_CONFIG.get(short_key, {})
+            
+            # 🔥 FIX: use short_key instead of verbose_key
+            val = raw_pillars.get(short_key, 0)
+
+            if isinstance(val, dict):
+                rich_pillars[short_key] = val
+                pillar_pcts[short_key] = val.get("percentage", 0)
+            else:
+                pct = float(val)
+                score = round((pct / 100.0) * config.get("max_points", 100), 1)
+
+                rich_pillars[short_key] = {
+                    "name": config.get("name", short_key),
+                    "score": score,
+                    "max_points": config.get("max_points", 100),
+                    "percentage": pct,
+                    "coverage": 100.0,
+                    "color": config.get("color", "#CCCCCC"),
+                    "metrics_tested": 0,
+                    "metrics_total": 0
+                }
+
+                pillar_pcts[short_key] = pct
+        
+        # for verbose_key, short_key in pillar_map.items():
+        #     config = PILLAR_CONFIG.get(short_key, {})
+        #     val = raw_pillars.get(verbose_key, 0)
+            
+        #     # If value is raw float/int (percentage), build the object
+        #     if isinstance(val, (int, float)):
+        #         pct = float(val)
+        #         print('pct',pct)
+        #         score = round((pct / 100.0) * config.get("max_points", 100), 1)
+        #         print('scoreeeeee',score)
+        #         rich_pillars[short_key] = {
+        #             "name": config.get("name", verbose_key),
+        #             "score": score,
+        #             "max_points": config.get("max_points", 100),
+        #             "percentage": pct,
+        #             "coverage": 100.0, # Default for legacy parity
+        #             "color": config.get("color", "#CCCCCC"),
+        #             "metrics_tested": 0,
+        #             "metrics_total": 0
+        #         }
+        #         pillar_pcts[short_key] = pct
+        #     else:
+        #         # If already a dict, just pass through (but map key)
+        #         rich_pillars[short_key] = val
+        #         pillar_pcts[short_key] = val.get("percentage", 0) if isinstance(val, dict) else 0
+
+
+        
+        rep["pillars"] = rich_pillars
+        
+        # 2. Re-hydrate tier
+        hps_final = instance.hps_final or 0
+        rep["tier"] = get_performance_tier(hps_final)
+        
+        # 3. Re-hydrate alert
+        rep["alert"] = get_alert_level(pillar_pcts)
+        
+        # 4. Ensure confidence_interval is numeric
+        ci = instance.confidence_interval
+        if isinstance(ci, dict):
+            # Fallback if it was saved as empty dict
+            rep["confidence_interval"] = 30.0 
+        
+        return rep
 
 # ──────────────────────────────────────────────
 # Support & Ticketing
@@ -395,28 +498,92 @@ class SupportTicketSerializer(serializers.ModelSerializer):
 # ──────────────────────────────────────────────
 
 class CCAssignmentSerializer(serializers.ModelSerializer):
+    cc_id = serializers.ReadOnlyField(source="cc.id")
+    member_id = serializers.ReadOnlyField(source="member.id")
+    member_name = serializers.CharField(source="member.username", read_only=True)
+    cc_name = serializers.CharField(source="cc.username", read_only=True)
+
     class Meta:
         model = CCAssignment
-        fields = "__all__"
+        fields = ["id", "cc_id", "cc_name", "member_id", "member_name", "role", "assigned_at"]
         read_only_fields = ["id", "assigned_at"]
 
 class CCAlertSerializer(serializers.ModelSerializer):
     class Meta:
         model = CCAlert
         fields = "__all__"
-        read_only_fields = ["id", "created_at"]
 
 class CCSessionSerializer(serializers.ModelSerializer):
+    cc_id = serializers.ReadOnlyField(source="cc.id")
+    member_id = serializers.ReadOnlyField(source="member.id")
+    member_name = serializers.CharField(source="member.username", read_only=True)
+    cc_name = serializers.CharField(source="cc.username", read_only=True)
+
     class Meta:
         model = CCSession
-        fields = "__all__"
-        read_only_fields = ["id", "created_at"]
+        fields = [
+            "id", "cc_id", "cc_name", "member_id", "member_name", 
+            "session_type", "scheduled_at", "duration_min", 
+            "status", "notes", "action_items", "created_at", "updated_at"
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 class CCProtocolSerializer(serializers.ModelSerializer):
     class Meta:
         model = CCProtocol
         fields = "__all__"
         read_only_fields = ["id", "created_at"]
+
+class CCPrescriptionSerializer(serializers.ModelSerializer):
+    cc_id = serializers.ReadOnlyField(source="clinician.id")
+    member_id = serializers.ReadOnlyField(source="member.id")
+    
+    class Meta:
+        model = CCPrescription
+        fields = "__all__"
+        read_only_fields = ["id", "prescribed_at"]
+
+class CarePlanSerializer(serializers.ModelSerializer):
+    member_id = serializers.ReadOnlyField(source="member.id")
+    hcp_id = serializers.ReadOnlyField(source="hcp.id")
+
+    class Meta:
+        model = CarePlan
+        fields = "__all__"
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+class CCMessageSerializer(serializers.ModelSerializer):
+    sender_id = serializers.ReadOnlyField(source="sender.id")
+    recipient_id = serializers.ReadOnlyField(source="recipient.id")
+
+    class Meta:
+        model = CCMessage
+        fields = "__all__"
+        read_only_fields = ["id", "sent_at"]
+
+class CCOverrideAuditSerializer(serializers.ModelSerializer):
+    member_id = serializers.ReadOnlyField(source="member.id")
+    clinician_id = serializers.ReadOnlyField(source="clinician.id")
+
+    class Meta:
+        model = CCOverrideAudit
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+class CCReferralSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CCReferral
+        fields = "__all__"
+
+class NFLETaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NFLETask
+        fields = "__all__"
+
+class EscalationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Escalation
+        fields = "__all__"
 
 # ──────────────────────────────────────────────
 # EMR & Appointments
@@ -461,4 +628,171 @@ class NutritionPlanSerializer(serializers.ModelSerializer):
         model = NutritionPlan
         fields = "__all__"
         read_only_fields = ["generated_at"]
-
+
+# ──────────────────────────────────────────────
+# Video Consultation & Notifications
+# ──────────────────────────────────────────────
+
+class VideoConsultationSerializer(serializers.ModelSerializer):
+    patient_name = serializers.CharField(source="patient.get_full_name", read_only=True)
+    patient_id = serializers.CharField(source="patient.id", read_only=True)
+    doctor_id = serializers.CharField(source="doctor.id", read_only=True)
+    scheduled_date = serializers.SerializerMethodField()
+    scheduled_time = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VideoConsultation
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+    def get_scheduled_date(self, obj):
+        return obj.scheduled_at.strftime("%Y-%m-%d") if obj.scheduled_at else None
+
+    def get_scheduled_time(self, obj):
+        return obj.scheduled_at.strftime("%H:%M") if obj.scheduled_at else None
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+# ──────────────────────────────────────────────
+# Lab & Phlebotomy
+# ──────────────────────────────────────────────
+
+class LabPartnerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LabPartner
+        fields = "__all__"
+
+class LabPanelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LabPanel
+        fields = "__all__"
+
+class LabOrderSerializer(serializers.ModelSerializer):
+    patient_name = serializers.CharField(source="patient.get_full_name", read_only=True)
+    panel_name = serializers.CharField(source="panel.name", read_only=True)
+    partner_name = serializers.CharField(source="lab_partner.name", read_only=True)
+
+    class Meta:
+        model = LabOrder
+        fields = "__all__"
+        read_only_fields = ["id", "ordered_at"]
+
+class PhlebotomistSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Phlebotomist
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+class SampleBookingSerializer(serializers.ModelSerializer):
+    patient_name = serializers.CharField(source="patient.get_full_name", read_only=True)
+    phlebotomist_name = serializers.CharField(source="assigned_phlebotomist.name", read_only=True)
+    
+    class Meta:
+        model = SampleBooking
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+class TelehealthSessionSerializer(serializers.ModelSerializer):
+    member_name = serializers.CharField(source="member.get_full_name", read_only=True)
+    
+    class Meta:
+        model = TelehealthSession
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+# ──────────────────────────────────────────────
+# Longevity Protocol & Outcomes
+# ──────────────────────────────────────────────
+
+class LongevityProtocolSerializer(serializers.ModelSerializer):
+    patient_name = serializers.CharField(source="patient.get_full_name", read_only=True)
+    
+    class Meta:
+        model = LongevityProtocol
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+class OutcomeCycleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OutcomeCycle
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+# ── Health Integration Serializers ──
+
+class OrganSystemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrganSystem
+        fields = "__all__"
+
+class AppointmentServiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AppointmentService
+        fields = "__all__"
+
+class MedicalConditionSerializer(serializers.ModelSerializer):
+    member_id = serializers.ReadOnlyField(source="user.id")
+    onset_date = serializers.ReadOnlyField(source="diagnosed_date")
+
+    class Meta:
+        model = MedicalCondition
+        fields = "__all__"
+
+class MedicationLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MedicationLog
+        fields = "__all__"
+
+class RefillRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RefillRequest
+        fields = "__all__"
+
+class SOSAlertSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SOSAlert
+        fields = "__all__"
+
+
+
+
+class EMRAllergySerializer(serializers.ModelSerializer):
+    member_id = serializers.ReadOnlyField(source="member.id")
+
+    class Meta:
+        model = EMRAllergy
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]
+
+
+class DiagnosticOrderSerializer(serializers.ModelSerializer):
+    member_id = serializers.ReadOnlyField(source="member.id")
+    ordered_by_id = serializers.ReadOnlyField(source="ordered_by.id")
+    ordered_by_name = serializers.CharField(source="ordered_by.username", read_only=True)
+
+    class Meta:
+        model = DiagnosticOrder
+        fields = "__all__"
+        read_only_fields = ["id", "ordered_at"]
+
+class DiagnosticCatalogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DiagnosticCatalog
+        fields = "__all__"
+
+class MedicationSerializer(serializers.ModelSerializer):
+    member_id = serializers.ReadOnlyField(source="member.id")
+
+    class Meta:
+        model = Medication
+        fields = "__all__"
+
+class HealthBriefSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HealthBrief
+        fields = "__all__"
+        read_only_fields = ["id", "created_at"]

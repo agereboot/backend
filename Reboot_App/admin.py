@@ -77,7 +77,26 @@ from .models import (
     NutritionLog, NutritionPlan,
     PlatformAnnouncement, AuditLog, EmployeeLeave, PayrollRecord,
     HelpdeskTicket, PharmacyInventory, CompanyContract,
-    PlatformStat, StrategicObjective
+    PlatformStat, StrategicObjective,
+    # Adding missing ones:
+    CCPrescription, CCMessage, CCOverrideAudit, CCReferral,
+    PharmacyCatalogItem, PharmacyOrder, PharmacyOrderItem,
+    Asset, LeaveBalance, EHSScore, BRIScore, CorpBiomarkerResult,
+    CorpWearableConnection, LabPartner, LabPanel, LabOrder,
+    NudgeCampaign, HREscalation, CareTeamEscalation, WellnessProgramme,
+    Intervention, FranchiseSeason, SocialPost, SocialComment,
+    UserBadge, CreditBalance, Notification, WhatsappLog,
+    VideoConsultation, TelehealthSession, Phlebotomist, SampleBooking,
+    PhlebotomistJob, Roadmap, RoadmapReview, LongevityProtocol,
+    Referral, CarePlanGoal, CareTeam, CareAppointment,
+    CareReview, MentalAssessment, CAAssessment, AdaptiveAssessment,
+    OutcomeCycle, HealthBrief, PrivacySetting, Season,
+    Medication, LabReport, AITrainingRecord, ChatMessage,
+    UserAddress, HCPProfile, HealthSnapshot, DailyChallenge,
+    BadgeCatalog, DopamineChallengeTemplate, OrganSystem,
+    AppointmentService, MedicalCondition, MedicationLog,
+    RefillRequest, SOSAlert, CarePlan,EMRAllergy, DiagnosticOrder,
+    DiagnosticCatalog,CareTeamMember
 )
 
 from django.db import models
@@ -106,6 +125,16 @@ def get_searchable_fields(model):
 class RoleAdmin(admin.ModelAdmin):
     list_display = get_all_fields(Role)
     search_fields = get_searchable_fields(Role)
+
+
+
+
+
+@admin.register(CareTeamMember)
+class CareTeamMemberAdmin(admin.ModelAdmin):
+    list_display = get_all_fields(CareTeamMember)
+    search_fields = get_searchable_fields(CareTeamMember)
+
 
 
 @admin.register(Company)
@@ -244,12 +273,12 @@ class SupportTicketAdmin(admin.ModelAdmin):
 
 @admin.register(CCAssignment)
 class CCAssignmentAdmin(admin.ModelAdmin):
-    list_display = ["member", "cc", "role", "assigned_at"]
+    list_display = ["member", "cc", "role", "created_at"]
     list_filter = ["role"]
 
 @admin.register(CCAlert)
 class CCAlertAdmin(admin.ModelAdmin):
-    list_display = ["member", "alert_type", "severity", "status", "created_at"]
+    list_display = ["member", "severity", "status", "created_at"]
     list_filter = ["severity", "status"]
 
 @admin.register(CCSession)
@@ -329,3 +358,34 @@ class PlatformStatAdmin(admin.ModelAdmin):
 class StrategicObjectiveAdmin(admin.ModelAdmin):
     list_display = ["title", "department", "status", "deadline", "owner"]
     list_filter = ["status", "department"]
+#  Automated Registration for remaining models 
+
+MISSING_MODELS = [
+    CCPrescription, CCMessage, CCOverrideAudit, CCReferral,
+    PharmacyCatalogItem, PharmacyOrder, PharmacyOrderItem,
+    Asset, LeaveBalance, EHSScore, BRIScore, CorpBiomarkerResult,
+    CorpWearableConnection, LabPartner, LabPanel, LabOrder,
+    NudgeCampaign, HREscalation, CareTeamEscalation, WellnessProgramme,
+    Intervention, FranchiseSeason, SocialPost, SocialComment,
+    UserBadge, CreditBalance, Notification, WhatsappLog,
+    VideoConsultation, TelehealthSession, Phlebotomist, SampleBooking,
+    PhlebotomistJob, Roadmap, RoadmapReview, LongevityProtocol,
+    Referral, CarePlanGoal, CareTeam, CareAppointment,
+    CareReview, MentalAssessment, CAAssessment, AdaptiveAssessment,
+    OutcomeCycle, HealthBrief, PrivacySetting, Season,
+    Medication, LabReport, AITrainingRecord, ChatMessage,
+    UserAddress, HCPProfile, HealthSnapshot, DailyChallenge,
+    BadgeCatalog, DopamineChallengeTemplate, OrganSystem,
+    AppointmentService, MedicalCondition, MedicationLog,
+    RefillRequest, SOSAlert, CarePlan,
+    EMRAllergy, DiagnosticOrder, DiagnosticCatalog
+]
+
+for model in MISSING_MODELS:
+    try:
+        @admin.register(model)
+        class DynamicAdmin(admin.ModelAdmin):
+            list_display = [f.name for f in model._meta.fields if not f.is_relation][:8]
+            search_fields = [f.name for f in model._meta.fields if isinstance(f, (models.CharField, models.TextField))][:5]
+    except Exception:
+        pass # Already registered or error

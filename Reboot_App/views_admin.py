@@ -13,7 +13,10 @@ from .models import (
 
 # Optional helper
 def is_admin(user):
-    return user.is_superuser or getattr(user.userprofile, 'role', None) in ['super_admin', 'hr_admin']
+    profile = getattr(user, 'profile', None)
+    if not profile: return user.is_superuser
+    role_name = profile.role.name if profile.role else 'employee'
+    return user.is_superuser or role_name in ['super_admin', 'hr_admin']
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -116,7 +119,8 @@ from django.db.models import Q
 def announcements_active(request):
     """Public employee endpoint. Excludes ones they already dismissed."""
     user = request.user
-    role = getattr(user.userprofile, 'role', 'employee')
+    profile = getattr(user, 'profile', None)
+    role = profile.role.name if (profile and profile.role) else 'employee'
     now = timezone.now()
     
     # Matching the specific boolean logic written in the FastAPI file:

@@ -36,7 +36,7 @@ from .models import (UserProfile,Question,UserAnswer,Role,Location,
     CognitiveAssessmentTemplate, CognitiveAssessmentResult,
     ReportRepository, PillarConfig,)
 import pandas as pd
-from datetime import timedelta
+from datetime import timedelta, datetime
 from .helpers import (
     generate_username,
     generate_temp_password,
@@ -56,10 +56,6 @@ from django_filters.rest_framework import DjangoFilterBackend
 import re
 import uuid
 import random
-from datetime import datetime, timezone
-
-from django.db.models import Q
-from django.utils import timezone as dj_timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -1580,40 +1576,70 @@ def purchase_credits_mock(request):
     })
 
 
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def get_credits(request):
+#     user = request.user
+#     profile = user.profile  # ✅ IMPORTANT
+
+#     transactions = profile.user.credit_transactions.all().order_by('-created_at')
+
+#     return Response({
+#         "available": profile.credits,
+#         "transactions": [
+#             {
+#                 "type": t.type,
+#                 "amount": t.amount,
+#                 "description": t.description,
+#                 "timestamp": t.created_at.isoformat()
+#             } for t in transactions
+#         ]
+#     })
+#     user = request.user
+
+#     transactions = user.credit_transactions.all().order_by('-created_at')[:10]
+
+#     return Response({
+#         "available": user.credits,
+#         "transactions": [
+#             {
+#                 "type": t.type,
+#                 "amount": t.amount,
+#                 "description": t.description,
+#                 "timestamp": t.created_at.isoformat()
+#             } for t in transactions
+#         ]
+#     })
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_credits(request):
     user = request.user
-    profile = user.profile  # ✅ IMPORTANT
+    profile = user.profile
 
-    transactions = profile.user.credit_transactions.all().order_by('-created_at')
+    # ✅ correct field: created_at
+    transactions = user.credit_transactions.all().order_by('-created_at')
 
     return Response({
         "available": profile.credits,
+
+        # ✅ count purchases
+        "purchased": transactions.filter(type="purchase").count(),
+
+        # ✅ transaction list
         "transactions": [
             {
                 "type": t.type,
                 "amount": t.amount,
                 "description": t.description,
-                "timestamp": t.created_at.isoformat()
-            } for t in transactions
+                "timestamp": t.created_at.isoformat()  # keep API key as timestamp if frontend expects
+            }
+            for t in transactions
         ]
     })
-    user = request.user
 
-    transactions = user.credit_transactions.all().order_by('-created_at')[:10]
 
-    return Response({
-        "available": user.credits,
-        "transactions": [
-            {
-                "type": t.type,
-                "amount": t.amount,
-                "description": t.description,
-                "timestamp": t.created_at.isoformat()
-            } for t in transactions
-        ]
-    })
 
 """
 biomarkers/views.py
