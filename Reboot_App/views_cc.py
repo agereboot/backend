@@ -235,6 +235,114 @@ def cc_dashboard(request):
 #     return Response({"members": members, "total": len(members)})
 
 
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def get_cc_members(request):
+#     """List all members assigned to this CC with sorting and filtering."""
+
+#     if not _require_hcp(request.user):
+#         return Response({"error": "HCP access restricted"}, status=status.HTTP_403_FORBIDDEN)
+
+#     user = request.user
+#     role = _resolve_role(user)
+    
+#     search = request.GET.get("search", "").lower()
+#     sort_by = request.GET.get("sort_by", "hps")
+#     filter_tier = request.GET.get("filter_tier", "")
+
+#     # -----------------------------
+#     # 1. Get Profiles
+#     # -----------------------------
+#     if role in ("corporate_hr_admin", "corporate_wellness_head"):
+#         profiles = UserProfile.objects.select_related("user")
+#     else:
+#         # Assigned members
+#         assigned_ids = set(
+#             CCAssignment.objects.filter(cc=user)
+#             .values_list('member_id', flat=True)
+#         )
+
+#         # Appointment members
+#         appt_ids = set(
+#             Appointment.objects.filter(assigned_hcp=user)
+#             .values_list('member_id', flat=True)
+#         )
+
+#         combined_ids = assigned_ids.union(appt_ids)
+
+#         profiles = UserProfile.objects.filter(
+#             user_id__in=combined_ids
+#         ).select_related("user")
+
+#     # -----------------------------
+#     # 2. Preload HPS (avoid N+1)
+#     # -----------------------------
+#     hps_map = {
+#         h.user_id: h
+#         for h in HPSScore.objects.order_by('user_id', '-timestamp').distinct('user_id')
+#     }
+
+#     members = []
+
+#     for p in profiles:
+#         m_user = p.user
+#         name = f"{m_user.first_name} {m_user.last_name}".strip() or m_user.username
+
+#         # Search filter
+#         if search and search not in name.lower() and search not in m_user.username.lower():
+#             continue
+
+#         latest_hps = hps_map.get(m_user.id)
+#         hps_val = latest_hps.hps_final if latest_hps else 0
+#         tier = latest_hps.tier if latest_hps else "UNKNOWN"
+
+#         # Tier filter
+#         if filter_tier and tier != filter_tier:
+#             continue
+
+#         alert_count = CCAlert.objects.filter(
+#             member=m_user, status="open"
+#         ).count()
+
+#         active_protocols = CCPrescription.objects.filter(
+#             member=m_user, status="active"
+#         ).count()
+
+#         members.append({
+#             "id": str(m_user.id),
+#             "username": m_user.username,
+#             "name": name,
+#             "hps_score": hps_val,
+#             "tier": tier,
+#             "open_alerts": alert_count,
+#             "active_protocols": active_protocols,
+#             "pillars": latest_hps.pillars if latest_hps else {}
+#         })
+
+#     # -----------------------------
+#     # 3. Sorting
+#     # -----------------------------
+#     if sort_by == "hps":
+#         members.sort(key=lambda x: x["hps_score"], reverse=True)
+#     elif sort_by == "alerts":
+#         members.sort(key=lambda x: x["open_alerts"], reverse=True)
+#     elif sort_by == "name":
+#         members.sort(key=lambda x: x["name"])
+
+#     return Response({
+#         "members": members,
+#         "total": len(members)
+#     })
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from django.db.models import OuterRef, Subquery, Count
+from django.shortcuts import get_object_or_404
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_cc_members(request):
@@ -245,7 +353,7 @@ def get_cc_members(request):
 
     user = request.user
     role = _resolve_role(user)
-    
+
     search = request.GET.get("search", "").lower()
     sort_by = request.GET.get("sort_by", "hps")
     filter_tier = request.GET.get("filter_tier", "")
@@ -256,13 +364,11 @@ def get_cc_members(request):
     if role in ("corporate_hr_admin", "corporate_wellness_head"):
         profiles = UserProfile.objects.select_related("user")
     else:
-        # Assigned members
         assigned_ids = set(
             CCAssignment.objects.filter(cc=user)
             .values_list('member_id', flat=True)
         )
 
-        # Appointment members
         appt_ids = set(
             Appointment.objects.filter(assigned_hcp=user)
             .values_list('member_id', flat=True)
@@ -275,15 +381,40 @@ def get_cc_members(request):
         ).select_related("user")
 
     # -----------------------------
-    # 2. Preload HPS (avoid N+1)
+    # 2. Latest HPS (FIXED ✅)
     # -----------------------------
-    hps_map = {
-        h.user_id: h
-        for h in HPSScore.objects.order_by('user_id', '-timestamp').distinct('user_id')
-    }
+    latest_hps_subquery = HPSScore.objects.filter(
+        user_id=OuterRef('user_id')
+    ).order_by('-timestamp').values('id')[:1]
+
+    latest_hps = HPSScore.objects.filter(
+        id__in=Subquery(latest_hps_subquery)
+    )
+
+    hps_map = {h.user_id: h for h in latest_hps}
+
+    # -----------------------------
+    # 3. Preload Alerts & Protocols (OPTIMIZED 🚀)
+    # -----------------------------
+    alert_counts = dict(
+        CCAlert.objects.filter(status="open")
+        .values("member_id")
+        .annotate(count=Count("id"))
+        .values_list("member_id", "count")
+    )
+
+    protocol_counts = dict(
+        CCPrescription.objects.filter(status="active")
+        .values("member_id")
+        .annotate(count=Count("id"))
+        .values_list("member_id", "count")
+    )
 
     members = []
 
+    # -----------------------------
+    # 4. Build Response
+    # -----------------------------
     for p in profiles:
         m_user = p.user
         name = f"{m_user.first_name} {m_user.last_name}".strip() or m_user.username
@@ -300,39 +431,31 @@ def get_cc_members(request):
         if filter_tier and tier != filter_tier:
             continue
 
-        alert_count = CCAlert.objects.filter(
-            member=m_user, status="open"
-        ).count()
-
-        active_protocols = CCPrescription.objects.filter(
-            member=m_user, status="active"
-        ).count()
-
         members.append({
             "id": str(m_user.id),
             "username": m_user.username,
             "name": name,
             "hps_score": hps_val,
             "tier": tier,
-            "open_alerts": alert_count,
-            "active_protocols": active_protocols,
+            "open_alerts": alert_counts.get(m_user.id, 0),
+            "active_protocols": protocol_counts.get(m_user.id, 0),
             "pillars": latest_hps.pillars if latest_hps else {}
         })
 
     # -----------------------------
-    # 3. Sorting
+    # 5. Sorting
     # -----------------------------
     if sort_by == "hps":
         members.sort(key=lambda x: x["hps_score"], reverse=True)
     elif sort_by == "alerts":
         members.sort(key=lambda x: x["open_alerts"], reverse=True)
     elif sort_by == "name":
-        members.sort(key=lambda x: x["name"])
+        members.sort(key=lambda x: x["name"].lower())
 
     return Response({
         "members": members,
         "total": len(members)
-    })
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])

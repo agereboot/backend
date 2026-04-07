@@ -34,7 +34,7 @@ from .models import (UserProfile,Question,UserAnswer,Role,Location,
  ChallengeParticipant,Company,QuestionOption,CreditTransaction,BiomarkerDefinition, BiomarkerResult, ManualEntry,
     BiomarkerCorrelation, WearableDevice, WearableConnection,
     CognitiveAssessmentTemplate, CognitiveAssessmentResult,
-    ReportRepository, PillarConfig,)
+    ReportRepository, PillarConfig,DailyChallenge)
 import pandas as pd
 from datetime import timedelta, datetime
 from .helpers import (
@@ -60,6 +60,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.db import transaction
 
 
 
@@ -1067,40 +1068,153 @@ def status_dropdown_api(request):
     })
 
 
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def create_challenge(request):
+#     profile = request.user.profile
+
+#     if profile.role.name != "hr_admin":
+#         return Response({"error": "Only HR can create challenges"}, status=403)
+
+#     data = request.data
+
+#     challenge = Challenge.objects.create(
+#         company=profile.company,
+#         created_by=request.user,
+#         name=data["name"],
+#         reward=data["reward"],
+#         rules=data["rules"],
+#         start_date=data["start_date"],
+#         end_date=data["end_date"],
+#         challenge_type=data["challenge_type"],
+#         status="active"
+#     )
+
+#     challenge.departments.set(
+#         Department.objects.filter(id__in=data.get("department_ids", []))
+#     )
+#     challenge.locations.set(
+#         Location.objects.filter(id__in=data.get("location_ids", []))
+#     )
+
+#     return Response({
+#         "message": "Challenge created successfully",
+#         "challenge_id": challenge.id
+#     }, status=201)
+
+
+
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def create_daily_challenge(request):
+#     profile = request.user.profile
+
+#     # ✅ Only HR
+#     if profile.role.name != "corporate_hr_admin":
+#         return Response({"error": "Only HR can create challenges"}, status=403)
+
+#     data = request.data
+#     challenge_date = data.get("date")
+
+#     if not challenge_date:
+#         return Response(
+#             {"error": "date is required"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+
+#     # ✅ Get all employees of same company
+#     employees = User.objects.filter(
+#         profile__company=profile.company
+#     ).exclude(id=request.user.id)  # optional: exclude HR
+
+#     created_count = 0
+
+#     for user in employees:
+#         _, created = DailyChallenge.objects.get_or_create(
+#             user=user,
+#             date=challenge_date,
+#             title=data.get("title"),
+#             defaults={
+                
+#                 "created_by": request.user,
+               
+#                 "description": data.get("description", ""),
+#                 "challenge_type": data.get("challenge_type", "wellness"),
+#                 "xp": data.get("xp", 0),
+#                 "surprise_reward": data.get("surprise_reward", "")
+#             }
+#         )
+
+#         if created:
+#             created_count += 1
+
+#     return Response({
+#         "message": "Challenge assigned to company employees",
+#         "total_employees": employees.count(),
+#         "created_challenges": created_count
+#     }, status=201)
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def create_challenge(request):
+def create_daily_challenge(request):
     profile = request.user.profile
 
-    if profile.role.name != "hr_admin":
-        return Response({"error": "Only HR can create challenges"}, status=403)
+    # ✅ Only HR allowed
+    if profile.role.name != "corporate_hr_admin":
+        return Response(
+            {"error": "Only HR can create challenges"},
+            status=status.HTTP_403_FORBIDDEN
+        )
 
     data = request.data
+    challenge_date = data.get("date")
 
-    challenge = Challenge.objects.create(
-        company=profile.company,
-        created_by=request.user,
-        name=data["name"],
-        reward=data["reward"],
-        rules=data["rules"],
-        start_date=data["start_date"],
-        end_date=data["end_date"],
-        challenge_type=data["challenge_type"],
-        status="active"
-    )
+    if not challenge_date:
+        return Response(
+            {"error": "date is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
-    challenge.departments.set(
-        Department.objects.filter(id__in=data.get("department_ids", []))
-    )
-    challenge.locations.set(
-        Location.objects.filter(id__in=data.get("location_ids", []))
-    )
+    if not data.get("title"):
+        return Response(
+            {"error": "title is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # ✅ Get all employees in company
+    employees = User.objects.filter(
+        profile__company=profile.company
+    ).exclude(id=request.user.id)
+
+    created_count = 0
+    skipped_count = 0
+
+    for user in employees:
+        obj, created = DailyChallenge.objects.get_or_create(
+            user=user,
+            date=challenge_date,
+            title=data.get("title"),  # ✅ important for uniqueness
+            defaults={
+                "created_by": request.user,
+                "description": data.get("description", ""),
+                "challenge_type": data.get("challenge_type", "wellness"),
+                "xp": data.get("xp", 0),
+                "surprise_reward": data.get("surprise_reward", "")
+            }
+        )
+
+        if created:
+            created_count += 1
+        else:
+            skipped_count += 1
 
     return Response({
-        "message": "Challenge created successfully",
-        "challenge_id": challenge.id
-    }, status=201)
+        "message": "Challenge assigned to company employees",
+        "total_employees": employees.count(),
+        "created_challenges": created_count,
+        "skipped_existing": skipped_count,
 
+    }, status=status.HTTP_201_CREATED)
 
 # @api_view(["GET"])
 # @permission_classes([IsAuthenticated])
@@ -1131,62 +1245,264 @@ def create_challenge(request):
 #     return Response(data)
 
 
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def hr_challenges_list(request):
+#     profile = request.user.profile
+
+    
+#     qs = (
+#         Challenge.objects
+#         .filter(company=profile.company)
+#         .select_related("created_by")
+#         .prefetch_related("departments", "locations")
+#         .annotate(
+#             participants_count=Count("challengeparticipant", distinct=True),
+#             avg_progress=Avg("challengeparticipant__progress"),
+#         )
+#     )
+
+    
+#     status_filter = request.GET.get("status")
+#     if status_filter:
+#         qs = qs.filter(status=status_filter)
+
+#     today = timezone.now().date()
+#     data = []
+
+#     for ch in qs:
+#         remaining_days = (ch.end_date - today).days
+
+#         data.append({
+#             "id": ch.id,
+#             "name": ch.name,
+#             "reward": ch.reward,
+
+#             # 👥 Participants
+#             "participants": ch.participants_count,
+
+#             # 📊 Progress bar (0–100)
+#             "average_progress": int(ch.avg_progress or 0),
+
+#             # ⏳ Days remaining
+#             "days_remaining": max(remaining_days, 0),
+
+#             # 🏷 Departments
+#             "departments": [
+#                 dept.name for dept in ch.departments.all()
+#             ],
+
+#             # 🧑 Created info
+#             "created_at": ch.created_at.strftime("%d %b"),
+#             "created_by": ch.created_by.first_name if ch.created_by else None,
+
+#             # 🔖 Status
+#             "status": ch.status,
+#         })
+
+#     return Response(data)
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.utils import timezone
+from datetime import datetime
+from django.contrib.auth.models import User
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def hr_challenges_list(request):
     profile = request.user.profile
 
-    
-    qs = (
-        Challenge.objects
-        .filter(company=profile.company)
-        .select_related("created_by")
-        .prefetch_related("departments", "locations")
-        .annotate(
-            participants_count=Count("challengeparticipant", distinct=True),
-            avg_progress=Avg("challengeparticipant__progress"),
-        )
-    )
+    if profile.role.name != "corporate_hr_admin":
+        return Response({"error": "Only HR can view"}, status=403)
 
-    
-    status_filter = request.GET.get("status")
-    if status_filter:
-        qs = qs.filter(status=status_filter)
+    # ✅ Get all employees in same company
+    employees = User.objects.filter(profile__company=profile.company)
+
+    qs = DailyChallenge.objects.filter(user__in=employees)
 
     today = timezone.now().date()
+
+    grouped = {}
+
+    # ✅ Group by (date + title)
+    for ch in qs:
+        key = (ch.date, ch.title)
+
+        if key not in grouped:
+            grouped[key] = {
+                "id": str(ch.id),
+                "name": ch.title,
+                "description": ch.description,
+                "reward": ch.surprise_reward,
+                "participants": 0,
+                "completed": 0,
+                "total_progress": 0,           # % progress sum
+                "total_actual_progress": 0,    # raw progress sum
+                "date": ch.date,
+                "xp": ch.xp,
+                "title": ch.title,
+                "challenge_type": ch.challenge_type,
+                "created_by": ch.created_by if hasattr(ch, "created_by") else None
+            }
+
+        grouped[key]["participants"] += 1
+        grouped[key]["total_progress"] += ch.actual_progress or 0
+        grouped[key]["total_actual_progress"] += ch.actual_progress or 0
+
+        if ch.completed:
+            grouped[key]["completed"] += 1
+
     data = []
 
-    for ch in qs:
-        remaining_days = (ch.end_date - today).days
+    for val in grouped.values():
+        participants = val["participants"]
+        completed = val["completed"]
+
+        avg_progress = int((completed / participants) * 100) if participants else 0
+        avg_user_progress = int(val["total_progress"] / participants) if participants else 0
+        avg_actual_progress = int(val["total_actual_progress"] / participants) if participants else 0
+
+        # Handle date safely (string or date)
+        challenge_date = val["date"]
+        if isinstance(challenge_date, str):
+            challenge_date = datetime.strptime(challenge_date, "%Y-%m-%d").date()
+
+        remaining_days = (challenge_date - today).days
 
         data.append({
-            "id": ch.id,
-            "name": ch.name,
-            "reward": ch.reward,
+            "id": val["id"],
+            "name": val["name"],
+            "reward": val["reward"],
+            "challenge_type": val["challenge_type"],
+            "date": val["date"],
+            "xp": val["xp"],
+            "title": val["title"],
+            "description": val["description"],
 
             # 👥 Participants
-            "participants": ch.participants_count,
+            "participants": participants,
 
-            # 📊 Progress bar (0–100)
-            "average_progress": int(ch.avg_progress or 0),
+            # 📊 Completion %
+            "average_progress": avg_progress,
+
+            # 📊 Avg % progress across users
+            "progress": avg_user_progress,
+
+            # 📊 Avg raw progress (optional extra insight)
+            "actual_progress": avg_actual_progress,
 
             # ⏳ Days remaining
             "days_remaining": max(remaining_days, 0),
 
-            # 🏷 Departments
-            "departments": [
-                dept.name for dept in ch.departments.all()
-            ],
+            # 🏷 Departments (not available now)
+            "departments": [],
 
             # 🧑 Created info
-            "created_at": ch.created_at.strftime("%d %b"),
-            "created_by": ch.created_by.first_name if ch.created_by else None,
+            "created_at": challenge_date.strftime("%d %b"),
+            "created_by": val["created_by"].first_name if val["created_by"] else None,
+            "created_by_id": val["created_by"].id if val["created_by"] else None,
 
             # 🔖 Status
-            "status": ch.status,
+            "status": "active" if challenge_date >= today else "completed",
         })
 
     return Response(data)
+
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def hr_challenges_list(request):
+#     profile = request.user.profile
+
+#     if profile.role.name != "corporate_hr_admin":
+#         return Response({"error": "Only HR can view"}, status=403)
+
+#     # ✅ Get all employees in same company
+#     employees = User.objects.filter(profile__company=profile.company)
+
+#     qs = DailyChallenge.objects.filter(user__in=employees)
+
+#     today = timezone.now().date()
+
+#     grouped = {}
+
+#     # ✅ Group by (date + title) to simulate Challenge
+#     for ch in qs:
+#         key = (ch.date, ch.title)
+#         print('ch',ch)
+#         print('ch.date,',ch.date)
+
+#         if key not in grouped:
+#             grouped[key] = {
+#                 "id": str(ch.id),  # fake id for UI
+#                 "name": ch.title,
+#                 "description":ch.description,
+#                 "reward": ch.surprise_reward,
+#                 "participants": 0,
+#                 "completed": 0,
+#                 "date": ch.date,
+#                 "xp":ch.xp,
+#                 "title":ch.title,
+#                 "progress":ch.actual_progress,
+#                 "challenge_type":ch.challenge_type,
+#                 "created_by": ch.created_by if hasattr(ch, "created_by") else None
+
+#             }
+
+#         grouped[key]["participants"] += 1
+
+#         if ch.completed:
+#             grouped[key]["completed"] += 1
+
+#     data = []
+
+#     for val in grouped.values():
+#         participants = val["participants"]
+#         completed = val["completed"]
+
+#         avg_progress = int((completed / participants) * 100) if participants else 0
+
+#         # Convert date string → date object
+#         challenge_date = datetime.strptime(val["date"], "%Y-%m-%d").date()
+
+#         remaining_days = (challenge_date - today).days
+
+#         data.append({
+#             "id": val["id"],
+#             "name": val["name"],
+#             "reward": val["reward"],
+#             "challenge_type":val["challenge_type"],
+#             "date": val["date"],
+#             "xp":val["xp"],
+#             "title":val["title"],
+#             "description":val["description"],
+
+#             # 👥 Participants
+#             "participants": participants,
+
+#             # 📊 Progress (converted from completion)
+#             "average_progress": avg_progress,
+
+#             # ⏳ Days remaining
+#             "days_remaining": max(remaining_days, 0),
+            
+
+#             # 🏷 Departments (not available now)
+#             "departments": [],
+
+#             # 🧑 Created info
+#             "created_at": challenge_date.strftime("%d %b"),
+#             "created_by": val["created_by"].first_name if val["created_by"] else None,
+#             "created_by_id": val["created_by"].id if val["created_by"] else None,
+
+#             # 🔖 Status
+#             "status": "active" if challenge_date >= today else "completed",
+           
+#         })
+
+#     return Response(data)
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -1211,91 +1527,340 @@ def employee_challenges(request):
         for ch in qs
     ])
 
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def join_challenge(request, id):
+#     challenge = get_object_or_404(Challenge, id=id, status="active")
+
+#     obj, created = ChallengeParticipant.objects.get_or_create(
+#         challenge=challenge,
+#         user=request.user
+#     )
+
+#     if not created:
+#         return Response({"message": "Already joined"})
+
+#     return Response({"message": "Joined challenge successfully"})
+
+
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def join_challenge(request, id):
-    challenge = get_object_or_404(Challenge, id=id, status="active")
+def join_daily_challenge(request, id):
+    """
+    Allows a user to join a daily challenge (if required)
+    """
 
-    obj, created = ChallengeParticipant.objects.get_or_create(
-        challenge=challenge,
+    dc = get_object_or_404(
+        DailyChallenge,
+        id=id,
         user=request.user
     )
 
-    if not created:
-        return Response({"message": "Already joined"})
+    # ✅ If already joined
+    if getattr(dc, "joined", False):
+        return Response(
+            {"message": "Already joined"},
+            status=status.HTTP_200_OK
+        )
 
-    return Response({"message": "Joined challenge successfully"})
+    # ✅ If challenge does NOT require join → auto allow
+    if hasattr(dc, "requires_join") and not dc.requires_join:
+        return Response(
+            {"message": "This challenge does not require joining"},
+            status=status.HTTP_200_OK
+        )
+
+    # ✅ Mark as joined
+    dc.joined = True
+    dc.save(update_fields=["joined"])
+
+    return Response(
+        {
+            "message": "Joined successfully ✅",
+            "challenge_id": str(dc.id),
+            "title": dc.title,
+            "joined": True
+        },
+        status=status.HTTP_200_OK
+    )
+
+
+# @api_view(["PATCH"])
+# update_daily_progress# @permission_classes([IsAuthenticated])
+# def update_progress(request, id):
+
+#     participant = get_object_or_404(
+#         ChallengeParticipant,
+#         challenge_id=id,
+#         user=request.user
+#     )
+
+#     # 🔴 STRICT KEY CHECK
+#     if "progress" not in request.data:
+#         return Response(
+#             {"error": "progress field is required"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+
+#     # 🔴 TYPE VALIDATION
+#     try:
+#         progress = int(request.data["progress"])
+#     except (ValueError, TypeError):
+#         return Response(
+#             {"error": "progress must be a number"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+
+#     # 🔴 RANGE VALIDATION
+#     if progress < 0 or progress > 100:
+#         return Response(
+#             {"error": "progress must be between 0 and 100"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+
+#     # ✅ UPDATE PROGRESS
+#     participant.progress = progress
+
+#     if progress >= 100:
+#         participant.status = "completed"
+#         participant.completed_at = timezone.now()
+#     else:
+#         participant.status = "inprogress"
+#         participant.completed_at = None
+
+#     participant.save()
+
+#     return Response(
+#         {
+#             "message": "Progress updated",
+#             "progress": participant.progress,
+#             "status": participant.status,
+#         },
+#         status=status.HTTP_200_OK
+#     )
+
+
+
+# @api_view(["PATCH"])
+# @permission_classes([IsAuthenticated])
+# def (request, id):
+#     """
+#     Update progress of a daily challenge.
+#     Accepts actual progress (e.g., steps, minutes, etc.)
+#     Converts it into percentage using target_value.
+#     """
+
+#     dc = get_object_or_404(
+#         DailyChallenge,
+#         id=id,
+#         user=request.user
+#     )
+
+#     # 🚫 BLOCK if not joined
+#     if not dc.joined:
+#         return Response(
+#             {"error": "You must join this challenge first"},
+#             status=status.HTTP_403_FORBIDDEN
+#         )
+
+#     # 🔴 VALIDATION
+#     if "progress" not in request.data:
+#         return Response(
+#             {"error": "progress field is required"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+
+#     try:
+#         actual_progress = int(request.data["progress"])
+#     except:
+#         return Response(
+#             {"error": "progress must be a number"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+
+#     if actual_progress < 0:
+#         return Response(
+#             {"error": "progress must be positive"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+
+#     # ✅ Convert to percentage using target_value
+#     if dc.target_value and dc.target_value > 0:
+#         progress_percent = int((actual_progress / dc.target_value) * 100)
+#     else:
+#         progress_percent = actual_progress  # fallback if no target
+
+#     # cap at 100%
+#     progress_percent = min(progress_percent, 100)
+
+#     with transaction.atomic():
+
+#         dc.progress = progress_percent
+
+#         # ✅ Mark completed
+#         if progress_percent >= 100 and not dc.completed:
+#             dc.completed = True
+
+#             reward_points = dc.xp if dc.xp else 10
+
+#             # ✅ Prevent duplicate rewards
+#             if not CreditTransaction.objects.filter(
+#                 user=request.user,
+#                 description__icontains=dc.title,
+#                 type="reward"
+#             ).exists():
+
+#                 CreditTransaction.objects.create(
+#                     user=request.user,
+#                     type="reward",
+#                     amount=reward_points,
+#                     description=f"Daily challenge completed: {dc.title}"
+#                 )
+
+#         dc.save()
+
+#     return Response({
+#         "message": "Progress updated ✅",
+#         "progress": dc.progress,
+#         "actual_progress": actual_progress,
+#         "target": dc.target_value,
+#         "completed": dc.completed
+#     }, status=status.HTTP_200_OK)
 
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
-def update_progress(request, id):
+def update_daily_progress(request, id):
 
-    participant = get_object_or_404(
-        ChallengeParticipant,
-        challenge_id=id,
+    dc = get_object_or_404(
+        DailyChallenge,
+        id=id,
         user=request.user
     )
 
-    # 🔴 STRICT KEY CHECK
+    # 🚫 BLOCK if not joined
+    if not dc.joined:
+        return Response(
+            {"error": "You must join this challenge first"},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     if "progress" not in request.data:
         return Response(
             {"error": "progress field is required"},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # 🔴 TYPE VALIDATION
     try:
-        progress = int(request.data["progress"])
-    except (ValueError, TypeError):
+        progress_input = int(request.data["progress"])
+    except:
         return Response(
             {"error": "progress must be a number"},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # 🔴 RANGE VALIDATION
-    if progress < 0 or progress > 100:
+    if progress_input <= 0:
         return Response(
-            {"error": "progress must be between 0 and 100"},
+            {"error": "progress must be greater than 0"},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # ✅ UPDATE PROGRESS
-    participant.progress = progress
+    with transaction.atomic():
 
-    if progress >= 100:
-        participant.status = "completed"
-        participant.completed_at = timezone.now()
-    else:
-        participant.status = "inprogress"
-        participant.completed_at = None
+        # ✅ ADD progress instead of overwrite
+        dc.actual_progress += progress_input
 
-    participant.save()
+        # ✅ Convert to %
+        if dc.target_value and dc.target_value > 0:
+            progress_percent = int((dc.actual_progress / dc.target_value) * 100)
+        else:
+            progress_percent = dc.actual_progress
 
-    return Response(
-        {
-            "message": "Progress updated",
-            "progress": participant.progress,
-            "status": participant.status,
-        },
-        status=status.HTTP_200_OK
-    )
+        progress_percent = min(progress_percent, 100)
+
+        dc.progress = progress_percent
+
+        # ✅ Complete logic + add credits to UserProfile
+        if progress_percent >= 100 and not dc.completed:
+            dc.completed = True
+
+            reward_points = dc.xp if dc.xp else 10
+
+            profile = request.user.userprofile
+            profile.credits = F('credits') + reward_points
+            profile.save(update_fields=["credits"])
+
+        # ✅ SAVE all required fields
+        dc.save(update_fields=["actual_progress", "completed"])
+
+    return Response({
+        "message": "Progress updated ✅",
+        "progress_percent": dc.progress,
+        "actual_progress": dc.actual_progress,
+        "target": dc.target_value,
+        "completed": dc.completed
+    })
+
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def challenge_participants(request, id):
+#     qs = ChallengeParticipant.objects.filter(challenge_id=id)
+
+#     return Response([
+#         {
+#             "employee": p.user.username,
+#             "progress": p.progress,
+#             "status": p.status
+#         }
+#         for p in qs
+#     ])
+
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def challenge_participants(request, id):
-    qs = ChallengeParticipant.objects.filter(challenge_id=id)
+    profile = request.user.profile
 
-    return Response([
-        {
-            "employee": p.user.username,
-            "progress": p.progress,
-            "status": p.status
-        }
-        for p in qs
-    ])
+    if profile.role.name != "corporate_hr_admin":
+        return Response({"error": "Only HR can view"}, status=403)
 
+    # ❗ id here = grouped challenge identifier (date + title)
+    # Expecting query params instead (better approach)
 
+    date = request.GET.get("date")
+    title = request.GET.get("title")
+
+    if not date or not title:
+        return Response(
+            {"error": "date and title are required"},
+            status=400
+        )
+
+    # ✅ Get company employees
+    employees = User.objects.filter(profile__company=profile.company)
+
+    qs = DailyChallenge.objects.filter(
+        user__in=employees,
+        date=date,
+        title=title
+    ).select_related("user")
+
+    data = []
+
+    for ch in qs:
+        data.append({
+            "employee": ch.user.username,
+
+            # ✅ convert completed → progress
+            "progress": 100 if ch.completed else 0,
+
+            # ✅ status mapping
+            "status": "completed" if ch.completed else "pending"
+        })
+
+    return Response(data)
 
 
 # ══════════════════════════════════════════════
@@ -1615,7 +2180,7 @@ def purchase_credits_mock(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_credits(request):
-    user = request.user
+    user = request.user 
     profile = user.profile
 
     # ✅ correct field: created_at

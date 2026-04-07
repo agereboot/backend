@@ -96,7 +96,7 @@ from .models import (
     BadgeCatalog, DopamineChallengeTemplate, OrganSystem,
     AppointmentService, MedicalCondition, MedicationLog,
     RefillRequest, SOSAlert, CarePlan,EMRAllergy, DiagnosticOrder,
-    DiagnosticCatalog,CareTeamMember
+    DiagnosticCatalog,CareTeamMember,ExerciseProgramme
 )
 
 from django.db import models
@@ -136,6 +136,10 @@ class CareTeamMemberAdmin(admin.ModelAdmin):
     search_fields = get_searchable_fields(CareTeamMember)
 
 
+@admin.register(ExerciseProgramme)
+class CareTeamMemberAdmin(admin.ModelAdmin):
+    list_display = get_all_fields(ExerciseProgramme)
+    search_fields = get_searchable_fields(ExerciseProgramme)
 
 @admin.register(Company)
 class CompanyAdmin(admin.ModelAdmin):

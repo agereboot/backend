@@ -651,6 +651,9 @@ class VideoConsultationSerializer(serializers.ModelSerializer):
     def get_scheduled_time(self, obj):
         return obj.scheduled_at.strftime("%H:%M") if obj.scheduled_at else None
 
+
+
+
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notification

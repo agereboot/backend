@@ -623,19 +623,180 @@ def get_visit_summary(request, member_id):
         "diagnoses": last_encounter.diagnosis_codes if last_encounter else []
     })
 
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def create_smart_encounter(request):
+#     """
+#     AI-powered smart encounter (parity with legacy /encounters/smart)
+#     Handles inline creation of Labs, Rx, Referrals, and Protocols.
+#     """
+#     data = request.data
+#     member_id = data.get("member_id")
+#     member = get_object_or_404(User, id=member_id)
+    
+#     with transaction.atomic():
+#         # 1. Create Encounter record
+#         encounter = EMREncounter.objects.create(
+#             member=member,
+#             hcp=request.user,
+#             encounter_type=data.get("encounter_type", "office_visit"),
+#             chief_complaint=data.get("chief_complaint", ""),
+#             subjective=data.get("subjective", ""),
+#             objective=data.get("objective", ""),
+#             assessment=data.get("assessment", ""),
+#             plan=data.get("plan", ""),
+#             diagnosis_codes=data.get("diagnosis_codes", []),
+#             vitals=data.get("vitals", {})
+#         )
+        
+#         # 2. Labs Ordered
+#         linked_labs = []
+#         labs_data = data.get("labs_ordered", [])
+#         for l_req in labs_data:
+#             panel_id = l_req.get("panel_id")
+#             panel = LabPanel.objects.filter(panel_id=panel_id).first()
+#             if panel:
+#                 l_order = LabOrder.objects.create(
+#                     order_number=f"ORD-{uuid.uuid4().hex[:8].upper()}",
+#                     patient=member,
+#                     ordered_by=request.user,
+#                     panel=panel,
+#                     lab_partner=LabPartner.objects.first(),
+#                     status="ordered",
+#                     priority=l_req.get("priority", "routine")
+#                 )
+#                 linked_labs.append(str(l_order.id))
+#         encounter.linked_lab_orders = linked_labs
+        
+#         # 3. Pharmacy Orders
+#         linked_pharmacy = []
+#         pharm_data = data.get("pharmacy_ordered", [])
+#         for p_req in pharm_data:
+#             order = PharmacyOrder.objects.create(
+#                 order_number=f"PH-{uuid.uuid4().hex[:8].upper()}",
+#                 patient=member,
+#                 ordered_by=request.user,
+#                 total_price=p_req.get("total_estimated_price", 0.0),
+#                 status="pending"
+#             )
+#             for item in p_req.get("items", []):
+#                 item_name = item.get("name", "Unknown Item")
+#                 item_id = item.get("item_id", f"RX-MOCK-{uuid.uuid4().hex[:4].upper()}")
+                
+#                 # Try to get existing item from catalog
+#                 catalog_item = PharmacyCatalogItem.objects.filter(Q(item_id=item_id) | Q(name__iexact=item_name)).first()
+#                 if not catalog_item:
+#                     catalog_item = PharmacyCatalogItem.objects.create(
+#                         item_id=item_id,
+#                         name=item_name,
+#                         type="prescription" if "rx" in item_name.lower() else "nutraceutical",
+#                         category="General",
+#                         price=item.get("price_at_order", 0.0)
+#                     )
+                
+#                 PharmacyOrderItem.objects.create(
+#                     order=order,
+#                     catalog_item=catalog_item,
+#                     price_at_order=item.get("price_at_order", 0.0),
+#                     quantity=item.get("quantity", 1),
+#                     dosing_instructions=item.get("instructions", "")
+#                 )
+#             linked_pharmacy.append(str(order.id))
+#         encounter.linked_pharmacy_orders = linked_pharmacy
+        
+#         # 4. Referrals
+#         linked_referrals = []
+#         ref_data = data.get("referrals_ordered", [])
+#         for r_req in ref_data:
+#             ref = CCReferral.objects.create(
+#                 member=member,
+#                 member_name=member.get_full_name(),
+#                 referral_type=r_req.get("role", "specialist"),
+#                 referred_to_name=r_req.get("hcp_name", ""),
+#                 reason=r_req.get("reason", ""),
+#                 referring_clinician=request.user,
+#                 referring_clinician_name=request.user.get_full_name(),
+#                 status="pending"
+#             )
+#             linked_referrals.append(str(ref.id))
+#         encounter.linked_referrals = linked_referrals
+        
+#         # 5. Protocols
+#         linked_protocols = []
+#         proto_data = data.get("protocols_prescribed", [])
+#         for proto_req in proto_data:
+#             status = "active"
+#             care_plan = CarePlan.objects.create(
+#                 member=member,
+#                 hcp=request.user,
+#                 hcp_name=request.user.get_full_name(),
+#                 title=f"Protocol Assignment: {proto_req.get('protocol_name')}",
+#                 protocols=[proto_req],
+#                 notes=f"Prescribed during encounter {encounter.id}"
+#             )
+#             linked_protocols.append(str(care_plan.id))
+#         encounter.linked_protocols = linked_protocols
+        
+#         # 6. Diagnostics
+#         linked_diagnostics = []
+#         diag_data = data.get("diagnostics_ordered", [])
+#         for d_req in diag_data:
+#             diag = DiagnosticOrder.objects.create(
+#                 member=member,
+#                 test_name=d_req.get("name"),
+#                 category=d_req.get("category", "Radiology"),
+#                 ordered_by=request.user,
+#                 urgency=d_req.get("urgency", "routine"),
+#                 status="ordered"
+#             )
+#             linked_diagnostics.append(str(diag.id))
+#         encounter.linked_diagnostics = linked_diagnostics
+        
+#         # 7. Follow-up Appointment
+#         if "follow up" in encounter.plan.lower():
+#             Appointment.objects.create(
+#                 member=member,
+#                 member_name=member.get_full_name(),
+#                 appointment_type="follow_up",
+#                 mode="telehealth",
+#                 scheduled_at=timezone.now() + timedelta(days=7),
+#                 reason=f"Follow up from encounter {encounter.id}",
+#                 assigned_hcp=request.user,
+#                 assigned_hcp_name=request.user.get_full_name(),
+#                 status="scheduled"
+#             )
+            
+#         encounter.save()
+        
+#     return Response({
+#         "status": "success",
+#         "encounter_id": str(encounter.id),
+#         "linked_entities": {
+#             "labs": encounter.linked_lab_orders,
+#             "pharmacy": encounter.linked_pharmacy_orders,
+#             "referrals": encounter.linked_referrals,
+#             "protocols": encounter.linked_protocols,
+#             "diagnostics": encounter.linked_diagnostics
+#         }
+#     }, status=status.HTTP_201_CREATED)
+
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def create_smart_encounter(request):
     """
-    AI-powered smart encounter (parity with legacy /encounters/smart)
-    Handles inline creation of Labs, Rx, Referrals, and Protocols.
+    AI-powered smart encounter
+    Handles inline creation of Labs, Rx, Referrals, Protocols, Diagnostics
     """
+
     data = request.data
     member_id = data.get("member_id")
     member = get_object_or_404(User, id=member_id)
-    
+
     with transaction.atomic():
-        # 1. Create Encounter record
+
+        # 1. Create Encounter
         encounter = EMREncounter.objects.create(
             member=member,
             hcp=request.user,
@@ -648,13 +809,12 @@ def create_smart_encounter(request):
             diagnosis_codes=data.get("diagnosis_codes", []),
             vitals=data.get("vitals", {})
         )
-        
-        # 2. Labs Ordered
+
+        # 2. Labs
         linked_labs = []
-        labs_data = data.get("labs_ordered", [])
-        for l_req in labs_data:
-            panel_id = l_req.get("panel_id")
-            panel = LabPanel.objects.filter(panel_id=panel_id).first()
+        for l_req in data.get("labs_ordered", []):
+            panel = LabPanel.objects.filter(panel_id=l_req.get("panel_id")).first()
+
             if panel:
                 l_order = LabOrder.objects.create(
                     order_number=f"ORD-{uuid.uuid4().hex[:8].upper()}",
@@ -666,12 +826,13 @@ def create_smart_encounter(request):
                     priority=l_req.get("priority", "routine")
                 )
                 linked_labs.append(str(l_order.id))
+
         encounter.linked_lab_orders = linked_labs
-        
-        # 3. Pharmacy Orders
+
+        # 3. Pharmacy
         linked_pharmacy = []
-        pharm_data = data.get("pharmacy_ordered", [])
-        for p_req in pharm_data:
+
+        for p_req in data.get("pharmacy_ordered", []):
             order = PharmacyOrder.objects.create(
                 order_number=f"PH-{uuid.uuid4().hex[:8].upper()}",
                 patient=member,
@@ -679,12 +840,15 @@ def create_smart_encounter(request):
                 total_price=p_req.get("total_estimated_price", 0.0),
                 status="pending"
             )
+
             for item in p_req.get("items", []):
                 item_name = item.get("name", "Unknown Item")
-                item_id = item.get("item_id", f"RX-MOCK-{uuid.uuid4().hex[:4].upper()}")
-                
-                # Try to get existing item from catalog
-                catalog_item = PharmacyCatalogItem.objects.filter(Q(item_id=item_id) | Q(name__iexact=item_name)).first()
+                item_id = item.get("item_id", f"RX-{uuid.uuid4().hex[:4].upper()}")
+
+                catalog_item = PharmacyCatalogItem.objects.filter(
+                    Q(item_id=item_id) | Q(name__iexact=item_name)
+                ).first()
+
                 if not catalog_item:
                     catalog_item = PharmacyCatalogItem.objects.create(
                         item_id=item_id,
@@ -693,7 +857,7 @@ def create_smart_encounter(request):
                         category="General",
                         price=item.get("price_at_order", 0.0)
                     )
-                
+
                 PharmacyOrderItem.objects.create(
                     order=order,
                     catalog_item=catalog_item,
@@ -701,13 +865,15 @@ def create_smart_encounter(request):
                     quantity=item.get("quantity", 1),
                     dosing_instructions=item.get("instructions", "")
                 )
+
             linked_pharmacy.append(str(order.id))
+
         encounter.linked_pharmacy_orders = linked_pharmacy
-        
+
         # 4. Referrals
         linked_referrals = []
-        ref_data = data.get("referrals_ordered", [])
-        for r_req in ref_data:
+
+        for r_req in data.get("referrals_ordered", []):
             ref = CCReferral.objects.create(
                 member=member,
                 member_name=member.get_full_name(),
@@ -719,13 +885,15 @@ def create_smart_encounter(request):
                 status="pending"
             )
             linked_referrals.append(str(ref.id))
+
         encounter.linked_referrals = linked_referrals
-        
+
         # 5. Protocols
         linked_protocols = []
-        proto_data = data.get("protocols_prescribed", [])
-        for proto_req in proto_data:
-            status = "active"
+
+        for proto_req in data.get("protocols_prescribed", []):
+            protocol_status = "active"  # ✅ FIXED
+
             care_plan = CarePlan.objects.create(
                 member=member,
                 hcp=request.user,
@@ -734,13 +902,15 @@ def create_smart_encounter(request):
                 protocols=[proto_req],
                 notes=f"Prescribed during encounter {encounter.id}"
             )
+
             linked_protocols.append(str(care_plan.id))
+
         encounter.linked_protocols = linked_protocols
-        
+
         # 6. Diagnostics
         linked_diagnostics = []
-        diag_data = data.get("diagnostics_ordered", [])
-        for d_req in diag_data:
+
+        for d_req in data.get("diagnostics_ordered", []):
             diag = DiagnosticOrder.objects.create(
                 member=member,
                 test_name=d_req.get("name"),
@@ -750,10 +920,11 @@ def create_smart_encounter(request):
                 status="ordered"
             )
             linked_diagnostics.append(str(diag.id))
+
         encounter.linked_diagnostics = linked_diagnostics
-        
-        # 7. Follow-up Appointment
-        if "follow up" in encounter.plan.lower():
+
+        # 7. Auto Follow-up
+        if encounter.plan and "follow up" in encounter.plan.lower():
             Appointment.objects.create(
                 member=member,
                 member_name=member.get_full_name(),
@@ -765,9 +936,9 @@ def create_smart_encounter(request):
                 assigned_hcp_name=request.user.get_full_name(),
                 status="scheduled"
             )
-            
+
         encounter.save()
-        
+
     return Response({
         "status": "success",
         "encounter_id": str(encounter.id),
@@ -779,7 +950,6 @@ def create_smart_encounter(request):
             "diagnostics": encounter.linked_diagnostics
         }
     }, status=status.HTTP_201_CREATED)
-
 
 # -------------------------------------------------------------------------
 # HEALTH ANALYTICS (HPS)

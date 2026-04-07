@@ -44,12 +44,12 @@ urlpatterns = [
     path("dropdowns/locations/", views.location_dropdown_api),
     path("dropdowns/departments/", views.department_dropdown_api),
     path("dropdowns/status/", views.status_dropdown_api),
-    path("hr/challenges/", views.create_challenge),
+    path("hr/challenges/", views.create_daily_challenge),
     path("hr/challenges/list/", views.hr_challenges_list),
     path("hr/challenges/<int:id>/participants/", views.challenge_participants),
     path("employee/challenges/", views.employee_challenges),
-    path("employee/challenges/<int:id>/join/", views.join_challenge),
-    path("employee/challenges/<int:id>/progress/", views.update_progress),
+    path("employee/challenges/<uuid:id>/join", views.join_daily_challenge),
+    path("employee/challenges/<uuid:id>/progress", views.update_daily_progress),
 
     # ── Role ──
     path("roles/",              views.RoleListCreateView.as_view(),    name="admin-role-list"),
@@ -252,6 +252,11 @@ urlpatterns = [
     path("video-consultation/join/<uuid:consultation_id>", views_video_consultation.join_consultation),
     path("video-consultation/end/<uuid:consultation_id>", views_video_consultation.end_consultation),
     path("video-consultation/biomarker-panels", views_video_consultation.get_biomarker_panels),
+    path("video-consultation/cancel/<uuid:consultation_id>",
+         views_video_consultation.cancel_consultation),
+ 
+    path("video-consultation/reschedule/<uuid:consultation_id>",
+         views_video_consultation.reschedule_consultation),
 
     # ── Patient Booking Parity ─────────────────────────────────────────────
     path("patient-booking/available-slots",           views_patient_booking.get_available_booking_slots),
@@ -403,9 +408,9 @@ urlpatterns = [
     path("employee/address/update",             views_employee.update_address),
 
     # Challenges (employee view — listing + join + progress)
-    path("employee/challenges/list",            views_employee.list_challenges),
-    path("employee/challenges/<int:challenge_id>/join",     views_employee.join_challenge),
-    path("employee/challenges/<int:challenge_id>/progress", views_employee.update_challenge_progress),
+    # path("employee/challenges/list",            views_employee.list_challenges),
+    # path("employee/challenges/<int:challenge_id>/join",     views.join_challenge),
+    # path("employee/challenges/<int:challenge_id>/progress", views.update_challenge_progress),
 
     # Rewards & badges
     path("rewards/badges",                      views_employee.get_badge_catalog),

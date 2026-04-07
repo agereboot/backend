@@ -1732,6 +1732,8 @@ class VideoConsultation(models.Model):
     emr_encounter    = models.ForeignKey("EMREncounter", on_delete=models.SET_NULL,
                                           null=True, blank=True, related_name="video_consultations")
     created_at       = models.DateTimeField(auto_now_add=True)
+    meet_link         = models.URLField(blank=True, null=True)
+    calendar_event_id = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
         ordering = ["-scheduled_at"]
@@ -2454,9 +2456,14 @@ class DailyChallenge(models.Model):
     surprise_reward = models.CharField(max_length=255, blank=True)
     completed      = models.BooleanField(default=False)
     completed_at   = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="created_daily_challenges")
+    joined = models.BooleanField(default=False)
+    target_value             = models.IntegerField(default=100)
+    actual_progress = models.IntegerField(default=0)
+
 
     class Meta:
-        unique_together = ("user", "date")
+        unique_together = ("user", "date", "title")
         ordering = ["-date"]
 
     def __str__(self):

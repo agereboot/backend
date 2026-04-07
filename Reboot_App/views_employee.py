@@ -39,7 +39,7 @@ import uuid
 import random
 import hashlib
 from datetime import datetime, timedelta, timezone as dt_timezone
-
+from django.db import transaction
 from django.contrib.auth.models import User
 from django.db.models import Q, Max
 from django.http import FileResponse, Http404
@@ -57,7 +57,7 @@ from .models import (
     SocialPost, SocialComment,
     Roadmap, Medication, DailyChallenge,
     PrivacySetting, UserAddress, HealthSnapshot,
-    BadgeCatalog, DopamineChallengeTemplate, WellnessProgramme,
+    BadgeCatalog, DopamineChallengeTemplate, WellnessProgramme,DailyChallenge
 )
 from .hps_engine.employee import (
     BADGE_CATALOG as _BADGE_CATALOG_FALLBACK, CHALLENGE_TEMPLATES,
@@ -385,37 +385,104 @@ def global_ranking(request):
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. GET /employee/daily-challenge
 # ══════════════════════════════════════════════════════════════════════════════
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def get_daily_challenge(request):
+#     user = request.user
+#     today = datetime.now(dt_timezone.utc).strftime("%Y-%m-%d")
+
+#     existing = DailyChallenge.objects.filter(user=user, date=today).first()
+#     if existing:
+#         data = _daily_challenge_to_dict(existing)
+#         data["surprise_reward"] = "Complete to reveal!" if not existing.completed else existing.surprise_reward
+#         return Response(data)
+
+#     templates = _get_dopamine_templates()
+#     seed_val = hash(today + str(user.id)) % len(templates)
+#     template = templates[seed_val]
+#     surprise = random.choice(template["surprise_pool"])
+
+#     dc = DailyChallenge.objects.create(
+#         user=user,
+#         date=today,
+#         title=template["title"],
+#         description=template["description"],
+#         challenge_type=template["type"],
+#         xp=template["xp"],
+#         surprise_reward=surprise,
+#         completed=False,
+#     )
+#     data = _daily_challenge_to_dict(dc)
+#     data["surprise_reward"] = "Complete to reveal!"
+#     return Response(data)
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_daily_challenge(request):
     user = request.user
-    today = datetime.now(dt_timezone.utc).strftime("%Y-%m-%d")
+    today = timezone.now().date()
 
-    existing = DailyChallenge.objects.filter(user=user, date=today).first()
-    if existing:
-        data = _daily_challenge_to_dict(existing)
-        data["surprise_reward"] = "Complete to reveal!" if not existing.completed else existing.surprise_reward
-        return Response(data)
+    qs = DailyChallenge.objects.filter(user=user)
 
-    templates = _get_dopamine_templates()
-    seed_val = hash(today + str(user.id)) % len(templates)
-    template = templates[seed_val]
-    surprise = random.choice(template["surprise_pool"])
+    # 🔍 FILTERS
+    status_filter = request.GET.get("status")
 
-    dc = DailyChallenge.objects.create(
-        user=user,
-        date=today,
-        title=template["title"],
-        description=template["description"],
-        challenge_type=template["type"],
-        xp=template["xp"],
-        surprise_reward=surprise,
-        completed=False,
-    )
-    data = _daily_challenge_to_dict(dc)
-    data["surprise_reward"] = "Complete to reveal!"
+    if status_filter == "active":
+        qs = qs.filter(date__gte=today.strftime("%Y-%m-%d"))
+
+    elif status_filter == "completed":
+        qs = qs.filter(completed=True)
+
+    elif status_filter == "pending":
+        qs = qs.filter(completed=False)
+
+    # Order latest first
+    qs = qs.order_by("-date")
+
+    data = []
+
+    for dc in qs:
+        challenge_date = datetime.strptime(dc.date, "%Y-%m-%d").date()
+
+        item = {
+            "id": str(dc.id),
+            "user_id": dc.user.id,
+            "date": dc.date,
+            "title": dc.title,
+            "description": dc.description,
+            "type": dc.challenge_type,
+            "xp": dc.xp,
+            "user_joined":dc.joined,
+            "target":dc.target_value,
+
+            # 🔒 Hide reward if not completed
+            "surprise_reward": (
+                dc.surprise_reward if dc.completed else "Complete to reveal!"
+            ),
+
+            "completed": dc.completed,
+            "completed_at": dc.completed_at.isoformat() if dc.completed_at else None,
+
+            # ✅ UI fields
+            "progress": dc.actual_progress,
+            "status": _get_status(dc, today),
+        }
+
+        data.append(item)
+
     return Response(data)
 
+
+def _get_status(dc, today):
+    challenge_date = datetime.strptime(dc.date, "%Y-%m-%d").date()
+
+    if dc.completed:
+        return "completed"
+    elif challenge_date >= today:
+        return "active"
+    else:
+        return "missed"
 
 def _daily_challenge_to_dict(dc):
     return {
@@ -435,6 +502,102 @@ def _daily_challenge_to_dict(dc):
 # ══════════════════════════════════════════════════════════════════════════════
 # 4. POST /employee/daily-challenge/complete
 # ══════════════════════════════════════════════════════════════════════════════
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def complete_daily_challenge(request):
+#     user = request.user
+#     today = datetime.now(dt_timezone.utc).strftime("%Y-%m-%d")
+
+#     dc = DailyChallenge.objects.filter(user=user, date=today).first()
+#     if not dc:
+#         return Response({"detail": "No daily challenge found for today"}, status=404)
+
+#     if dc.completed:
+#         return Response(_daily_challenge_to_dict(dc))
+
+#     dc.completed = True
+#     dc.completed_at = timezone.now()
+#     dc.save(update_fields=["completed", "completed_at"])
+
+#     # Award credits if the surprise contains "bonus credits"
+#     credit_match = re.search(r"(\d+)\s*bonus\s*credits", dc.surprise_reward or "")
+#     if credit_match:
+#         credits = int(credit_match.group(1))
+#         _add_credits(user, credits, f"Daily challenge reward: {dc.title}")
+
+#     # Increment streak on profile (best-effort)
+#     try:
+#         profile = user.profile
+#         if hasattr(profile, "streak_days"):
+#             profile.streak_days = (profile.streak_days or 0) + 1
+#             profile.save(update_fields=["streak_days"])
+#     except Exception:
+#         pass
+
+#     # Create social feed item
+#     _create_feed_item(user, "daily_challenge", f"completed today's daily challenge: **{dc.title}**!")
+
+#     return Response(_daily_challenge_to_dict(dc))
+
+
+
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def complete_daily_challenge(request):
+#     user = request.user
+#     challenge_id = request.data.get("challenge_id")
+
+#     # ❗ REQUIRED
+#     if not challenge_id:
+#         return Response({"error": "challenge_id is required"}, status=400)
+
+#     try:
+#         dc = DailyChallenge.objects.get(id=challenge_id, user=user)
+#     except DailyChallenge.DoesNotExist:
+#         return Response({"detail": "Challenge not found"}, status=404)
+
+#     # ✅ Already completed
+#     if dc.completed:
+#         data = _daily_challenge_to_dict(dc)
+#         data["progress"] = 100
+#         data["status"] = "completed"
+#         return Response(data)
+
+#     # ✅ Mark complete
+#     dc.completed = True
+#     dc.completed_at = timezone.now()
+#     dc.save(update_fields=["completed", "completed_at"])
+
+#     # 🎁 Reward logic
+#     credit_match = re.search(r"(\d+)\s*bonus\s*credits", dc.surprise_reward or "")
+#     if credit_match:
+#         credits = int(credit_match.group(1))
+#         _add_credits(user, credits, f"Daily challenge reward: {dc.title}")
+
+#     # 🔥 Streak update
+#     try:
+#         profile = user.profile
+#         if hasattr(profile, "streak_days"):
+#             profile.streak_days = (profile.streak_days or 0) + 1
+#             profile.save(update_fields=["streak_days"])
+#     except Exception:
+#         pass
+
+#     # 📢 Feed update
+#     _create_feed_item(
+#         user,
+#         "daily_challenge",
+#         f"completed today's daily challenge: **{dc.title}**!"
+#     )
+
+#     # ✅ Final response (same format + extra fields)
+#     data = _daily_challenge_to_dict(dc)
+#     data["progress"] = 100
+#     data["status"] = "completed"
+
+#     return Response(data)
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def complete_daily_challenge(request):
@@ -446,31 +609,27 @@ def complete_daily_challenge(request):
         return Response({"detail": "No daily challenge found for today"}, status=404)
 
     if dc.completed:
-        return Response(_daily_challenge_to_dict(dc))
+        return Response({"detail": "Already completed"})
 
-    dc.completed = True
-    dc.completed_at = timezone.now()
-    dc.save(update_fields=["completed", "completed_at"])
+    with transaction.atomic():
+        # ✅ Mark completed
+        dc.completed = True
+        dc.save()
 
-    # Award credits if the surprise contains "bonus credits"
-    credit_match = re.search(r"(\d+)\s*bonus\s*credits", dc.surprise_reward or "")
-    if credit_match:
-        credits = int(credit_match.group(1))
-        _add_credits(user, credits, f"Daily challenge reward: {dc.title}")
+        # ✅ Add credits (use xp or reward field)
+        reward_points = dc.xp if dc.xp else 10  # fallback
 
-    # Increment streak on profile (best-effort)
-    try:
-        profile = user.profile
-        if hasattr(profile, "streak_days"):
-            profile.streak_days = (profile.streak_days or 0) + 1
-            profile.save(update_fields=["streak_days"])
-    except Exception:
-        pass
+        CreditTransaction.objects.create(
+            user=user,
+            type="reward",
+            amount=reward_points,
+            description=f"Reward for completing challenge: {dc.title}"
+        )
 
-    # Create social feed item
-    _create_feed_item(user, "daily_challenge", f"completed today's daily challenge: **{dc.title}**!")
-
-    return Response(_daily_challenge_to_dict(dc))
+    return Response({
+        "message": "Challenge completed 🎉",
+        "reward_earned": reward_points
+    })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
