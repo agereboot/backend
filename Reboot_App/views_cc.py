@@ -3,19 +3,22 @@ import random
 import json
 import logging
 from datetime import datetime, timezone, timedelta
-from django.db.models import Q, Avg, Count
+from django.db.models import Q, Avg, Count, Sum
 from django.contrib.auth.models import User
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.utils.timezone import now
+
 
 from .models import (
     CCAlert, NFLETask, Escalation, CCReferral, 
     CCAssignment, HPSScore, UserProfile, CCSession, 
     CCProtocol, CCPrescription, CarePlan, CCMessage, CCOverrideAudit,
     BiomarkerResult, BiomarkerDefinition, Appointment, EMREncounter,
-    LabOrder, LabPanel, TelehealthSession, MemberMedicalHistory
+    LabOrder, LabPanel, TelehealthSession, MemberMedicalHistory,
+    CorpWearableConnection, EmployeePlan
 )
 from .serializers import (
     CCAlertSerializer, NFLETaskSerializer, EscalationSerializer, 
@@ -340,122 +343,143 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from django.db.models import OuterRef, Subquery, Count
+from django.db.models import OuterRef, Subquery, Count, Sum
 from django.shortcuts import get_object_or_404
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_cc_members(request):
-    """List all members assigned to this CC with sorting and filtering."""
-
+    """List members assigned to the current CC/HCP with rich data parity."""
     if not _require_hcp(request.user):
         return Response({"error": "HCP access restricted"}, status=status.HTTP_403_FORBIDDEN)
 
     user = request.user
     role = _resolve_role(user)
 
+    # Filtering/Sorting params
     search = request.GET.get("search", "").lower()
-    sort_by = request.GET.get("sort_by", "hps")
+    sort_by = request.GET.get("sort_by", "-joined_at")
     filter_tier = request.GET.get("filter_tier", "")
 
-    # -----------------------------
-    # 1. Get Profiles
-    # -----------------------------
+    # 1. Get Assigned Profiles
     if role in ("corporate_hr_admin", "corporate_wellness_head"):
-        profiles = UserProfile.objects.select_related("user")
+        profiles_qs = UserProfile.objects.all()
     else:
-        assigned_ids = set(
-            CCAssignment.objects.filter(cc=user)
-            .values_list('member_id', flat=True)
-        )
+        assigned_ids = CCAssignment.objects.filter(cc=user).values_list('member_id', flat=True)
+        appt_ids = Appointment.objects.filter(assigned_hcp=user).values_list('member_id', flat=True)
+        combined_ids = set(assigned_ids) | set(appt_ids)
+        profiles_qs = UserProfile.objects.filter(user_id__in=combined_ids)
 
-        appt_ids = set(
-            Appointment.objects.filter(assigned_hcp=user)
-            .values_list('member_id', flat=True)
-        )
+    profiles = profiles_qs.select_related('user', 'role', 'department', 'company')
 
-        combined_ids = assigned_ids.union(appt_ids)
-
-        profiles = UserProfile.objects.filter(
-            user_id__in=combined_ids
-        ).select_related("user")
-
-    # -----------------------------
-    # 2. Latest HPS (FIXED ✅)
-    # -----------------------------
+    # 2. Latest HPS for all selected profiles
     latest_hps_subquery = HPSScore.objects.filter(
         user_id=OuterRef('user_id')
     ).order_by('-timestamp').values('id')[:1]
-
-    latest_hps = HPSScore.objects.filter(
+    
+    panel_latest_scores = HPSScore.objects.filter(
         id__in=Subquery(latest_hps_subquery)
     )
+    hps_map = {h.user_id: h for h in panel_latest_scores}
 
-    hps_map = {h.user_id: h for h in latest_hps}
+    # 3. Counts
+    alert_counts = dict(CCAlert.objects.filter(status="open").values('member_id').annotate(c=Count('id')).values_list('member_id', 'c'))
+    protocol_counts = dict(CCPrescription.objects.filter(status="active").values('member_id').annotate(c=Count('id')).values_list('member_id', 'c'))
 
-    # -----------------------------
-    # 3. Preload Alerts & Protocols (OPTIMIZED 🚀)
-    # -----------------------------
-    alert_counts = dict(
-        CCAlert.objects.filter(status="open")
-        .values("member_id")
-        .annotate(count=Count("id"))
-        .values_list("member_id", "count")
-    )
-
-    protocol_counts = dict(
-        CCPrescription.objects.filter(status="active")
-        .values("member_id")
-        .annotate(count=Count("id"))
-        .values_list("member_id", "count")
-    )
-
-    members = []
-
-    # -----------------------------
-    # 4. Build Response
-    # -----------------------------
+    member_data = []
     for p in profiles:
         m_user = p.user
         name = f"{m_user.first_name} {m_user.last_name}".strip() or m_user.username
-
+        
         # Search filter
         if search and search not in name.lower() and search not in m_user.username.lower():
             continue
 
         latest_hps = hps_map.get(m_user.id)
         hps_val = latest_hps.hps_final if latest_hps else 0
-        tier = latest_hps.tier if latest_hps else "UNKNOWN"
-
+        tier = (latest_hps.tier if latest_hps else "UNKNOWN")
+        
         # Tier filter
-        if filter_tier and tier != filter_tier:
+        if filter_tier and tier.upper() != filter_tier.upper():
             continue
+            
+        # Plan info
+        plan_obj = EmployeePlan.objects.filter(user=m_user, status="active").first()
+        plan_name = (plan_obj.plan.name if plan_obj and plan_obj.plan else "rookie_league").replace(" ", "_").lower()
+        
+        # Wearable info
+        wearable = CorpWearableConnection.objects.filter(user=m_user).first()
+        wearable_type = wearable.device_type if wearable and wearable.connected else "Apple Watch Series 9"
 
-        members.append({
+        # Construct Address Mock
+        address = {
+            "address_line": "TEST_123 Main Street, Apt 4B",
+            "landmark": "Near Central Station",
+            "city": "Mumbai",
+            "state": "",
+            "pin_code": "400001",
+            "latitude": None,
+            "longitude": None,
+            "address_type": "home",
+            "contact_number": p.phone_number or "+91-9876543210"
+        }
+
+        chrono_age = p.age or 30
+        bio_age = chrono_age - 2.5
+        hps_tier = (latest_hps.tier.lower() if latest_hps and latest_hps.tier else "silver")
+        if hps_val >= 800: hps_tier = "platinum"
+        elif hps_val >= 700: hps_tier = "gold"
+        
+        member_data.append({
             "id": str(m_user.id),
-            "username": m_user.username,
             "name": name,
-            "hps_score": hps_val,
+            "email": m_user.email,
+            "age": chrono_age,
+            "sex": p.sex or "M",
+            "height_cm": p.height_cm or 175,
+            "weight_kg": p.weight_kg or 72,
+            "ethnicity": p.ethnicity or "SOUTH_ASIAN",
+            "franchise": p.franchise or "AgeReboot Corporate",
+            "role": p.role.name if p.role else "employee",
+            "phone": p.phone_number or "+91-9876543210",
+            "department": p.department.name if p.department else "Operations",
+            "specialty": "",
+            "qualification": "",
+            "managed_conditions": p.managed_conditions or [],
+            "adherence_pct": p.adherence_pct or 82,
+            "streak_days": p.streak_days or 14,
+            "joined_at": m_user.date_joined.isoformat(),
+            "is_demo": p.is_demo or False,
+            "biological_age": bio_age,
+            "hps_tier": hps_tier,
+            "profit_share_eligible": True,
+            "wearable_type": wearable_type,
+            "onboarding_status": "completed",
+            "plan": plan_name,
+            "address": address,
+            "company": (p.company.name if p.company else "AgeReboot"),
+            "dob": p.dob or "1995-01-01",
+            "employee_id": f"EMP{m_user.id}",
+            "location_confirmed": True,
+            "hps_score": round(hps_val, 1),
             "tier": tier,
+            "pillars": latest_hps.pillars if latest_hps else {},
             "open_alerts": alert_counts.get(m_user.id, 0),
-            "active_protocols": protocol_counts.get(m_user.id, 0),
-            "pillars": latest_hps.pillars if latest_hps else {}
+            "active_protocols": protocol_counts.get(m_user.id, 0)
         })
 
-    # -----------------------------
-    # 5. Sorting
-    # -----------------------------
-    if sort_by == "hps":
-        members.sort(key=lambda x: x["hps_score"], reverse=True)
-    elif sort_by == "alerts":
-        members.sort(key=lambda x: x["open_alerts"], reverse=True)
-    elif sort_by == "name":
-        members.sort(key=lambda x: x["name"].lower())
-
+    # Sorting
+    if sort_by == 'hps':
+        member_data.sort(key=lambda x: x['hps_score'], reverse=True)
+    elif sort_by == '-hps':
+        member_data.sort(key=lambda x: x['hps_score'])
+    elif sort_by == 'name':
+        member_data.sort(key=lambda x: x['name'].lower())
+    
     return Response({
-        "members": members,
-        "total": len(members)
-    }, status=status.HTTP_200_OK)
+        "members": member_data,
+        "total": len(member_data)
+    })
 
 
 @api_view(["GET"])
@@ -584,6 +608,68 @@ def get_cc_protocols(request):
         "categories": categories,
         "total": protocols.count()
     })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_messaging_thread_parity(request, member_id):
+    """GET /api/patient/messaging/{member_id} with full legacy parity."""
+    if not _require_hcp(request.user):
+        return Response({"error": "HCP access restricted"}, status=status.HTTP_403_FORBIDDEN)
+
+    user = request.user
+    member = get_object_or_404(User, id=member_id)
+
+    # 1. Fetch messages
+    messages_qs = CCMessage.objects.filter(
+        (Q(sender=user, recipient=member) | Q(sender=member, recipient=user))
+    ).order_by('sent_at')
+    
+    # 2. Mark unread as read (sender=member, recipient=user)
+    unread_messages = messages_qs.filter(sender=member, recipient=user, read=False)
+    if unread_messages.exists():
+        unread_messages.update(read=True, read_at=now())
+    
+    # 3. Serialize
+    serializer = CCMessageSerializer(messages_qs, many=True)
+    
+    # 4. Member info
+    member_info = {
+        "name": f"{member.first_name} {member.last_name}".strip() or member.username,
+        "role": member.profile.role.name if hasattr(member, 'profile') and member.profile.role else "patient",
+        "email": member.email
+    }
+    
+    return Response({
+        "messages": serializer.data,
+        "member": member_info
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def send_secure_message_parity(request):
+    """POST /api/patient/messaging/send with full legacy parity."""
+    if not _require_hcp(request.user):
+        return Response({"error": "HCP access restricted"}, status=status.HTTP_403_FORBIDDEN)
+
+    recipient_id = request.data.get("recipient_id")
+    content = request.data.get("content")
+    
+    if not recipient_id or not content:
+        return Response({"error": "Missing recipient_id or content"}, status=400)
+        
+    recipient = get_object_or_404(User, id=recipient_id)
+    
+    message = CCMessage.objects.create(
+        sender=request.user,
+        sender_name=f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username,
+        sender_role=_resolve_role(request.user),
+        recipient=recipient,
+        content=content
+    )
+    
+    return Response(CCMessageSerializer(message).data)
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -796,15 +882,22 @@ def get_role_metadata(request):
         "all_roles": {k: v["label"] for k, v in ROLE_META.items()}
     })
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def role_intelligent_dashboard(request):
-    """Specialized widgets for each HCP role."""
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+def cc_role_dashboard(request):
+    """Specialized widgets and stats for each HCP role."""
+    if not _require_hcp(request.user):
+        return Response({"error": "HCP access restricted"}, status=status.HTTP_403_FORBIDDEN)
+        
     user_role = _resolve_role(request.user)
     meta = ROLE_META.get(user_role, ROLE_META["longevity_physician"])
     
+    # Dynamic stats based on role
+    assigned_count = CCAssignment.objects.filter(cc=request.user).count()
+    open_alerts = CCAlert.objects.filter(cc=request.user, status="open").count()
+    
     widgets = []
-    if user_role in ("longevity_physician", "clinician"):
+    if user_role in ("longevity_physician", "clinician", "medical_director"):
         widgets = [
             {"type": "stat", "key": "critical_alerts", "label": "Critical Alerts", "value": CCAlert.objects.filter(status="open", severity="CRITICAL").count(), "color": "#EF4444", "icon": "AlertTriangle"},
             {"type": "stat", "key": "pending_labs", "label": "Pending Labs", "value": LabOrder.objects.filter(status="ordered").count(), "color": "#0F9F8F", "icon": "FlaskConical"},
@@ -812,17 +905,23 @@ def role_intelligent_dashboard(request):
         ]
     elif user_role in ("fitness_coach", "coach"):
         widgets = [
-            {"type": "stat", "key": "compliance", "label": "Compliance", "value": "78%", "color": "#10B981", "icon": "Users"},
+            {"type": "stat", "key": "compliance", "label": "Avg Compliance", "value": "78%", "color": "#10B981", "icon": "Users"},
+            {"type": "stat", "key": "active_challenges", "label": "Active Challenges", "value": 5, "color": "#6366F1", "icon": "Target"},
             {"type": "panel", "key": "vo2max_tracker", "label": "VO2max Tracker"}
         ]
-    # Add other roles as needed...
-
+    elif user_role == "nutritional_coach":
+        widgets = [
+            {"type": "stat", "key": "meal_plans", "label": "Pending Meal Plans", "value": 3, "color": "#F59E0B", "icon": "Utensils"},
+            {"type": "stat", "key": "supplements", "label": "Supplements Assigned", "value": 42, "color": "#10B981", "icon": "Pill"},
+        ]
+    
     return Response({
         "role": user_role,
         "role_label": meta["label"],
         "widgets": widgets,
-        "total_members": CCAssignment.objects.filter(cc=request.user).count(),
-        "open_alerts": CCAlert.objects.filter(cc=request.user, status="open").count()
+        "total_members": assigned_count,
+        "open_alerts": open_alerts,
+        "last_updated": datetime.now(timezone.utc).isoformat()
     })
 
 # ─── CDSS & AI ─────────────────────────────────────────────────
@@ -974,184 +1073,261 @@ def get_protocol_recommendations(request, member_id):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def population_health(request):
-    """Aggregate stats for CC panel."""
-    avg_hps = HPSScore.objects.aggregate(Avg('hps_final'))['hps_final__avg'] or 700.0
+    """Aggregate population health analytics for the clinician's panel."""
+    if not _require_hcp(request.user):
+        return Response({"error": "HCP access restricted"}, status=status.HTTP_403_FORBIDDEN)
+
+    user = request.user
+    # Get assigned members
+    member_ids = CCAssignment.objects.filter(cc=user).values_list('member_id', flat=True)
+    
+    # If no assignments, fallback to all employees for demo purposes
+    if not member_ids:
+        member_ids = User.objects.filter(profile__role__name__icontains="employee").values_list('id', flat=True)
+
+    # Get latest HPS scores for these members
+    latest_hps_subquery = HPSScore.objects.filter(
+        user_id=OuterRef('user_id')
+    ).order_by('-timestamp').values('id')[:1]
+    
+    panel_latest_scores = HPSScore.objects.filter(
+        id__in=Subquery(latest_hps_subquery),
+        user_id__in=member_ids
+    )
+
+    hps_scores = list(panel_latest_scores.values_list('hps_final', flat=True))
+    scored_members_count = len(hps_scores)
+    
+    avg_hps = sum(hps_scores) / max(scored_members_count, 1)
+    
+    # Tier Distribution
+    tier_dist = {}
+    for score in panel_latest_scores:
+        t = (score.tier or "UNKNOWN").upper()
+        tier_dist[t] = tier_dist.get(t, 0) + 1
+        
+    # Pillar Averages
+    pillar_totals = {"BR": [], "PF": [], "CA": [], "SR": [], "BL": []}
+    for score in panel_latest_scores:
+        pillars = score.pillars or {}
+        for p_code in pillar_totals:
+            pv = pillars.get(p_code, 0)
+            val = pv.get("score", pv) if isinstance(pv, dict) else pv
+            try:
+                pillar_totals[p_code].append(float(val))
+            except:
+                pass
+    
+    pillar_avgs = {k: round(sum(v) / max(len(v), 1), 1) if v else 70.0 for k, v in pillar_totals.items()}
+
+    # HPS distribution buckets (matches Flask)
+    buckets = {"0-200": 0, "200-400": 0, "400-600": 0, "600-800": 0, "800-1000": 0}
+    for s in hps_scores:
+        if s < 200: buckets["0-200"] += 1
+        elif s < 400: buckets["200-400"] += 1
+        elif s < 600: buckets["400-600"] += 1
+        elif s < 800: buckets["600-800"] += 1
+        else: buckets["800-1000"] += 1
+
+    # At-risk/Optimal counts
+    at_risk_count = sum(1 for s in hps_scores if s < 400)
+    optimal_count = sum(1 for s in hps_scores if s >= 700)
+
+    # Top biomarker concerns (from CCAlerts)
+    alerts = CCAlert.objects.filter(cc=user, status="open").values('biomarker', 'severity')
+    bm_concern = {}
+    for a in alerts:
+        bm = a.get('biomarker', 'Unknown')
+        if not bm: continue
+        if bm not in bm_concern:
+            bm_concern[bm] = {"count": 0, "critical": 0}
+        bm_concern[bm]["count"] += 1
+        if a.get('severity') in ("CRITICAL", "HIGH"):
+            bm_concern[bm]["critical"] += 1
+            
+    top_concerns = sorted(bm_concern.items(), key=lambda x: x[1]["count"], reverse=True)[:8]
+
     return Response({
-        "total_members": User.objects.count(),
+        "total_members": len(member_ids),
+        "scored_members": scored_members_count,
         "avg_hps": round(avg_hps, 1),
-        "tier_distribution": {"OPTIMAL": 12, "AVERAGE": 45, "AT_RISK": 10},
-        "pillar_averages": {"BR": 72, "PF": 65, "CA": 80, "SR": 60, "BL": 75}
+        "tier_distribution": tier_dist,
+        "pillar_averages": pillar_avgs,
+        "hps_distribution": buckets,
+        "at_risk_members": at_risk_count,
+        "optimal_members": optimal_count,
+        "top_biomarker_concerns": [{"biomarker": bm, **data} for bm, data in top_concerns],
     })
+
+
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def revenue_analytics(request):
+#     """Service-wise revenue simulation (MTD)."""
+#     # Dynamic calculation based on appointments and orders
+#     from .models import Appointment, LabOrder
+#     # from datetime import datetime
+    
+#     now = datetime.now()
+#     today = now
+#     consultation_rev = Appointment.objects.filter(status="completed", scheduled_at__month=now.month).count() * 150
+#     start_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+#     pharmacy_rev = 2500 # Simulated for now
+
+#     # lab_rev = LabOrder.objects.filter(
+#     # status="completed",
+#     # created_at__year=today.year,
+#     # created_at__month=today.month
+#     # ).aggregate(total=Sum("price"))["total"] or 0
+
+#     today = now()
+
+#     start_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+#     lab_rev = LabOrder.objects.filter(
+#         status="completed",
+#         ordered_at__gte=start_of_month,
+#         ordered_at__lte=today
+#     ).count() * 200
+    
+#     total = consultation_rev + lab_rev + pharmacy_rev or 1
+    
+#     return Response({
+#         "total_revenue_mtd": total,
+#         "currency": "USD",
+#         "streams": {
+#             "consultation": {"revenue": consultation_rev, "pct": round((consultation_rev / total) * 100)},
+#             "labs": {"revenue": lab_rev, "pct": round((lab_rev / total) * 100)},
+#             "pharmacy": {"revenue": pharmacy_rev, "pct": round((pharmacy_rev / total) * 100)}
+#         },
+#         "period": "current_month"
+#     })
+
+from django.utils.timezone import now
+from django.db.models import Sum
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def revenue_analytics(request):
-    """Service-wise revenue simulation."""
+    """Service-wise revenue simulation (MTD)."""
+    
+    from .models import Appointment, LabOrder
+
+    today = now()   # ✅ correct
+
+    start_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    consultation_rev = (
+        Appointment.objects.filter(
+            status="completed",
+            scheduled_at__gte=start_of_month,
+            scheduled_at__lte=today
+        ).count() * 150
+    )
+
+    # ✅ Better: use actual price instead of hardcoded 200
+    lab_rev = (
+        LabOrder.objects.filter(
+            status="completed",
+            ordered_at__gte=start_of_month,
+            ordered_at__lte=today
+        ).aggregate(total=Sum("price"))["total"] or 0
+    )
+
+    pharmacy_rev = 2500  # simulated
+
+    total = consultation_rev + lab_rev + pharmacy_rev
+    if total == 0:
+        total = 1
+
     return Response({
-        "total_revenue_mtd": 12500,
+        "total_revenue_mtd": total,
+        "currency": "USD",
         "streams": {
-            "consultation": {"revenue": 4500, "pct": 36},
-            "labs": {"revenue": 5500, "pct": 44},
-            "pharmacy": {"revenue": 2500, "pct": 20}
-        }
+            "consultation": {
+                "revenue": consultation_rev,
+                "pct": round((consultation_rev / total) * 100)
+            },
+            "labs": {
+                "revenue": lab_rev,
+                "pct": round((lab_rev / total) * 100)
+            },
+            "pharmacy": {
+                "revenue": pharmacy_rev,
+                "pct": round((pharmacy_rev / total) * 100)
+            }
+        },
+        "period": "current_month"
     })
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def cc_referrals(request):
-    referrals = CCReferral.objects.all()
-    return Response({"referrals": CCReferralSerializer(referrals, many=True).data})
+    """List transitions of care / referrals."""
+    from .models import CCReferral
+    from .serializers import CCReferralSerializer
+    referrals = CCReferral.objects.all().order_by('-created_at')
+    return Response({
+        "referrals": CCReferralSerializer(referrals, many=True).data,
+        "stats": {
+            "pending": referrals.filter(status="pending").count(),
+            "in_progress": referrals.filter(status="in_progress").count(),
+            "completed": referrals.filter(status="completed").count()
+        }
+    })
 
 # ─── AI PRIORITY FEED ──────────────────────────────────────────
-
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def ai_priority_feed(request):
-#     """Top-3 AI-curated actions for the current role."""
-#     user = request.user
-#     role = _resolve_role(user)
-#     meta = ROLE_META.get(role, ROLE_META["longevity_physician"])
-    
-#     # 1. Escalations
-#     escalations = Escalation.objects.filter(status="pending").order_by("-created_at")[:3]
-#     # 2. Alerts
-#     alerts = CCAlert.objects.filter(cc=user, status="open").order_by("-aps_score")[:3]
-#     # 3. Tasks
-#     tasks = NFLETask.objects.filter(assigned_roles__contains=role, status="open").order_by("-created_at")[:3]
-    
-#     actions = []
-    
-#     # Priority 1: Escalations
-#     for e in escalations:
-#         actions.append({
-#             "type": "escalation",
-#             "priority": "high",
-#             "title": f"Escalation: {e.category.replace('_', ' ').title()}",
-#             "detail": e.clinical_summary[:100],
-#             "member_name": e.member_name,
-#             "action": "Review",
-#             "coach_name": e.coach_name
-#         })
-        
-#     # Priority 2: High Severity Alerts
-#     if len(actions) < 3:
-#         for a in alerts:
-#             actions.append({
-#                 "type": "alert",
-#                 "priority": "high",
-#                 "title": f"Alert: {a.biomarker} ({a.severity})",
-#                 "detail": a.ai_interpretation[:100],
-#                 "member_name": a.member.username,
-#                 "action": "Triage"
-#             })
-#             if len(actions) >= 3: break
-            
-#     # Priority 3: NFLE Tasks
-#     if len(actions) < 3:
-#         for t in tasks:
-#             actions.append({
-#                 "type": "nfle_task",
-#                 "priority": t.priority,
-#                 "title": t.task_description,
-#                 "detail": f"Suggest: {t.protocol_suggestion}",
-#                 "member_name": t.member.username if t.member else "Unknown",
-#                 "action": "Assign"
-#             })
-#             if len(actions) >= 3: break
-
-#     # Fallback
-#     if not actions:
-#         actions.append({
-#             "type": "info",
-#             "priority": "low",
-#             "title": "All caught up!",
-#             "detail": "No urgent actions detected for your role.",
-#             "member_name": "",
-#             "action": "Review Population"
-#         })
-
-#     return Response({
-#         "role": role,
-#         "role_label": meta["label"],
-#         "actions": actions[:3],
-#         "generated_at": datetime.now(timezone.utc).isoformat()
-#     })
-
-
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def ai_priority_feed(request):
     """Top-3 AI-curated actions for the current role."""
+    from .models import CareTeamEscalation, CCAlert, NFLETask
+    from datetime import datetime, timezone
     
     user = request.user
     role = _resolve_role(user)
     meta = ROLE_META.get(role, ROLE_META["longevity_physician"])
-    
     actions = []
 
-    # -----------------------------
     # 1. Escalations (Priority 1)
-    # -----------------------------
-    escalations = Escalation.objects.filter(
-        status="pending"
-    ).order_by("-created_at")[:3]
-
+    escalations = CareTeamEscalation.objects.filter(status="pending").order_by("-created_at")[:3]
     for e in escalations:
         actions.append({
             "type": "escalation",
             "priority": "high",
             "title": f"Escalation: {e.category.replace('_', ' ').title()}",
-            "detail": (e.clinical_summary or "")[:100],
-            "member_name": e.member_name,
+            "detail": e.handoff_note.get("clinical_summary", "")[:100] if e.handoff_note else "",
+            "member_name": f"{e.member.first_name} {e.member.last_name}" if e.member else "Unknown",
             "action": "Review",
-            "coach_name": e.coach_name
+            "coach_name": f"{e.coach.first_name} {e.coach.last_name}" if e.coach else "System"
         })
 
-    # -----------------------------
     # 2. Alerts (Priority 2)
-    # -----------------------------
     if len(actions) < 3:
-        alerts = CCAlert.objects.filter(
-            cc=user,
-            status="open"
-        ).order_by("-aps_score")[:3]
-
+        alerts = CCAlert.objects.filter(cc=user, status="open").order_by("-aps_score")[:3]
         for a in alerts:
             actions.append({
                 "type": "alert",
                 "priority": "high",
                 "title": f"Alert: {a.biomarker} ({a.severity})",
-                "detail": (a.ai_interpretation or "")[:100],
+                "detail": a.ai_interpretation[:100] if a.ai_interpretation else "",
                 "member_name": a.member.username if a.member else "Unknown",
                 "action": "Triage"
             })
-            if len(actions) >= 3:
-                break
+            if len(actions) >= 3: break
 
-    # -----------------------------
     # 3. NFLE Tasks (Priority 3)
-    # FIX: Removed JSON __contains
-    # -----------------------------
     if len(actions) < 3:
-        tasks_qs = NFLETask.objects.filter(
-            status="open"
-        ).order_by("-created_at")
-
+        tasks_qs = NFLETask.objects.filter(status="open").order_by("-created_at")
         filtered_tasks = []
-
         for t in tasks_qs:
             roles = t.assigned_roles or []
-
-            # Handle both JSON list and string fallback safely
-            if isinstance(roles, list) and role in roles:
+            if (isinstance(roles, list) and role in roles) or (isinstance(roles, str) and role in roles):
                 filtered_tasks.append(t)
-            elif isinstance(roles, str) and role in roles:
-                filtered_tasks.append(t)
-
-            if len(filtered_tasks) >= 3:
-                break
-
+            if len(filtered_tasks) >= 3: break
+            
         for t in filtered_tasks:
             actions.append({
                 "type": "nfle_task",
@@ -1161,12 +1337,9 @@ def ai_priority_feed(request):
                 "member_name": t.member.username if t.member else "Unknown",
                 "action": "Assign"
             })
-            if len(actions) >= 3:
-                break
+            if len(actions) >= 3: break
 
-    # -----------------------------
     # 4. Fallback
-    # -----------------------------
     if not actions:
         actions.append({
             "type": "info",
@@ -1177,12 +1350,40 @@ def ai_priority_feed(request):
             "action": "Review Population"
         })
 
-    # -----------------------------
-    # Response
-    # -----------------------------
     return Response({
         "role": role,
         "role_label": meta["label"],
         "actions": actions[:3],
         "generated_at": datetime.now(timezone.utc).isoformat()
     })
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_nfle_tasks(request):
+    """Next-Frontier Longevity Engineering (NFLE) Tasks."""
+    from .models import NFLETask
+    from .serializers import NFLETaskSerializer
+    
+    if not _require_hcp(request.user):
+        return Response({"error": "HCP access restricted"}, status=status.HTTP_403_FORBIDDEN)
+        
+    role = _resolve_role(request.user)
+    status_filter = request.GET.get("status", "open")
+    
+    tasks_qs = NFLETask.objects.filter(status=status_filter)
+    filtered_tasks = []
+    for t in tasks_qs:
+        roles = t.assigned_roles or []
+        if (isinstance(roles, list) and role in roles) or (isinstance(roles, str) and role in roles):
+            filtered_tasks.append(t)
+            
+    return Response({
+        "tasks": NFLETaskSerializer(filtered_tasks, many=True).data,
+        "total": len(filtered_tasks)
+    })
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def role_intelligent_dashboard(request):
+    """Backwards compatibility for role-dashboard alias."""
+    return cc_role_dashboard(request)

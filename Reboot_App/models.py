@@ -789,6 +789,7 @@ class CCMessage(models.Model):
     content = models.TextField()
     sent_at = models.DateTimeField(auto_now_add=True)
     read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
 
 class CCOverrideAudit(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -1099,6 +1100,7 @@ class Appointment(models.Model):
     notes = models.TextField(blank=True, null=True)
     encounter_id = models.CharField(max_length=100, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    google_meet_link = models.URLField(max_length=500, blank=True, null=True)
 
 
 class MemberMedicalHistory(models.Model):
@@ -1529,12 +1531,28 @@ class HREscalation(models.Model):
 
 class CareTeamEscalation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    employee = models.ForeignKey(User, on_delete=models.CASCADE, related_name="care_escalations")
-    type = models.CharField(max_length=100)
-    reason = models.TextField()
-    urgency = models.CharField(max_length=50, default="normal")
-    status = models.CharField(max_length=50, default="pending")
-    escalated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="escalated_care")
+    member = models.ForeignKey(User, on_delete=models.CASCADE, related_name="care_escalations")
+    coach = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="sent_care_team_escalations")
+    physician = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="received_escalations")
+    
+    category = models.CharField(max_length=100)
+    severity = models.CharField(max_length=50, default="medium")
+    sla_hours = models.IntegerField(default=24)
+    sla_deadline = models.DateTimeField(null=True, blank=True)
+    
+    handoff_note = models.JSONField(default=dict) # clinical_summary, deteriorating_metrics, etc.
+    member_hps_score = models.IntegerField(null=True, blank=True)
+    member_hps_tier = models.CharField(max_length=100, blank=True, null=True)
+    
+    status = models.CharField(max_length=50, default="pending") # pending, acknowledged, resolved
+    physician_response = models.TextField(blank=True, null=True)
+    physician_notes = models.TextField(blank=True, null=True)
+    physician_action_taken = models.TextField(blank=True, null=True)
+    
+    responded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="escalation_responses")
+    responded_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    
     created_at = models.DateTimeField(default=timezone.now)
 
 class WellnessProgramme(models.Model):

@@ -183,3 +183,54 @@ def send_message(request, thread_id):
     )
     
     return Response(CCMessageSerializer(msg).data)
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_conversations(request):
+    """
+    GET /api/patient/messaging/conversations
+    Get all messaging conversations for the current user/HCP.
+    """
+    user = request.user
+    
+    # Get all messages where user is sender or recipient
+    from django.db.models import Q
+    messages = CCMessage.objects.filter(
+        Q(sender=user) | Q(recipient=user)
+    ).order_by('-sent_at')[:500]
+
+    # Group by conversation partner
+    convos = {}
+    for msg in messages:
+        # Determine who the other person is
+        if msg.sender_id == user.id:
+            partner = msg.recipient
+            partner_name = msg.recipient_name or (partner.get_full_name() if partner else "Unknown")
+        else:
+            partner = msg.sender
+            partner_name = msg.sender_name or (partner.get_full_name() if partner else "Unknown")
+            
+        partner_id = str(partner.id) if partner else "system"
+        
+        if partner_id not in convos:
+            convos[partner_id] = {
+                "partner_id": partner_id,
+                "partner_name": partner_name,
+                "last_message": msg.content[:80],
+                "last_message_at": msg.sent_at.isoformat(),
+                "unread_count": 0,
+                "total_messages": 0,
+            }
+        
+        # Increment total messages
+        convos[partner_id]["total_messages"] += 1
+        
+        # Count unread if user is the recipient
+        if msg.recipient_id == user.id and not getattr(msg, 'read', True):
+            convos[partner_id]["unread_count"] += 1
+
+    # Sort by most recent message time
+    conversation_list = sorted(convos.values(), key=lambda c: c["last_message_at"], reverse=True)
+    
+    return Response({"conversations": conversation_list})
+

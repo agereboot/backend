@@ -44,6 +44,18 @@ def get_medical_history(request, member_id=None):
     return Response(MemberMedicalHistorySerializer(history).data)
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_medical_history(request, member_id=None):
+    if member_id:
+        target_user = get_object_or_404(User, id=member_id)
+    else:
+        target_user = request.user
+        
+    history, created = MemberMedicalHistory.objects.get_or_create(member=target_user)
+    return Response(MemberMedicalHistorySerializer(history).data)
+
+
 @api_view(['POST', 'PUT'])
 @permission_classes([IsAuthenticated])
 def update_medical_history(request, member_id=None):
@@ -66,6 +78,44 @@ def update_medical_history(request, member_id=None):
         
     history.save()
     return Response(MemberMedicalHistorySerializer(history).data)
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def medical_history_parity(request, member_id):
+    """GET/PUT /api/patient/{member_id}/medical-history with legacy parity."""
+    # Clinical role check
+    if not request.user.profile.role.name in ["longevity_physician", "clinician", "medical_director", "nurse_navigator", "clinical_admin"]:
+        return Response({"error": "HCP role required"}, status=403)
+
+    member = get_object_or_404(User, id=member_id)
+    history, _ = MemberMedicalHistory.objects.get_or_create(member=member)
+    
+    if request.method == 'GET':
+        return Response({
+            "history": {
+                "member_id": str(member.id),
+                "conditions": history.conditions,
+                "family_history": history.family_history,
+                "surgical_history": history.surgical_history,
+                "personal_history": history.personal_history,
+                "allergies": history.allergies,
+                "gynaec_history": history.gynaec_history,
+                "updated_at": history.updated_at.isoformat()
+            }
+        })
+    
+    # PUT logic
+    data = request.data.get("history", request.data)
+    if "conditions" in data: history.conditions = data["conditions"]
+    if "family_history" in data: history.family_history = data["family_history"]
+    if "surgical_history" in data: history.surgical_history = data["surgical_history"]
+    if "personal_history" in data: history.personal_history = data["personal_history"]
+    if "allergies" in data: history.allergies = data["allergies"]
+    if "gynaec_history" in data: history.gynaec_history = data["gynaec_history"]
+    
+    history.save()
+    return Response({"status": "updated"})
 
 
 # -------------------------------------------------------------------------
@@ -392,49 +442,112 @@ def list_appointments(request):
         "total": appts.count()
     })
 
-@api_view(['POST'])
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def create_appointment(request):
+#     """
+#     POST /api/emr/appointments/create
+#     Creates a new appointment for a member.
+#     """
+#     if request.user.profile.role.name not in ["longevity_physician", "clinician", "medical_director", "clinical_admin"]:
+#         return Response({"detail": "Access restricted to clinical team"}, status=403)
+
+#     data = request.data
+#     member_id = data.get("member_id")
+#     if not member_id:
+#         return Response({"detail": "member_id is required"}, status=400)
+
+#     member = get_object_or_404(User, id=member_id)
+    
+#     # Determine if new patient
+#     is_new_patient = not EMREncounter.objects.filter(member=member).exists()
+
+#     # Parse scheduled_at
+#     scheduled_at = data.get("scheduled_at")
+#     if not scheduled_at:
+#         scheduled_at = timezone.now() + timedelta(days=1)
+    
+#     appt = Appointment.objects.create(
+#         member=member,
+#         member_name=member.get_full_name() or member.username,
+#         appointment_type=data.get("appointment_type", "new" if is_new_patient else "follow_up"),
+#         mode=data.get("mode", "telehealth"),
+#         scheduled_at=scheduled_at,
+#         duration_min=data.get("duration_min", 30),
+#         fee_type=data.get("fee_type", "insurance"),
+#         fee_amount=data.get("fee_amount", 0.0),
+#         reason=data.get("reason", ""),
+#         assigned_hcp=request.user, # Default to the one creating it
+#         assigned_hcp_name=request.user.get_full_name() or request.user.username,
+#         is_new_patient=is_new_patient,
+#         status="scheduled",
+#         notes=data.get("notes", ""),
+#         google_meet_link=f"https://meet.google.com/rvp-{uuid.uuid4().hex[:4]}-{uuid.uuid4().hex[:3]}" if data.get("mode", "telehealth") == "telehealth" else None
+#     )
+
+#     return Response(AppointmentSerializer(appt).data, status=201)
+
+
+@api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_appointment(request):
     """
     POST /api/emr/appointments/create
     Creates a new appointment for a member.
     """
-    if request.user.profile.role.name not in ["longevity_physician", "clinician", "medical_director", "clinical_admin"]:
+
+    # ✅ Role check
+    allowed_roles = ["longevity_physician", "clinician", "medical_director", "clinical_admin"]
+    if request.user.profile.role.name not in allowed_roles:
         return Response({"detail": "Access restricted to clinical team"}, status=403)
 
     data = request.data
+
+    # ✅ Validate member_id
     member_id = data.get("member_id")
     if not member_id:
         return Response({"detail": "member_id is required"}, status=400)
 
     member = get_object_or_404(User, id=member_id)
-    
-    # Determine if new patient
+
+    # ✅ Check if new patient
     is_new_patient = not EMREncounter.objects.filter(member=member).exists()
 
-    # Parse scheduled_at
+    # ✅ Handle scheduled_at safely
     scheduled_at = data.get("scheduled_at")
     if not scheduled_at:
         scheduled_at = timezone.now() + timedelta(days=1)
-    
+
+    # ✅ Normalize mode (IMPORTANT FIX)
+    mode = data.get("mode", "telehealth").lower()
+
+    # ✅ Generate Google Meet link only for telehealth
+    google_meet_link = None
+    if mode == "telehealth":
+        google_meet_link = f"https://meet.google.com/rvp-{uuid.uuid4().hex[:4]}-{uuid.uuid4().hex[:3]}"
+
+    # ✅ Create appointment
     appt = Appointment.objects.create(
         member=member,
         member_name=member.get_full_name() or member.username,
         appointment_type=data.get("appointment_type", "new" if is_new_patient else "follow_up"),
-        mode=data.get("mode", "telehealth"),
+        mode=mode,
         scheduled_at=scheduled_at,
         duration_min=data.get("duration_min", 30),
         fee_type=data.get("fee_type", "insurance"),
         fee_amount=data.get("fee_amount", 0.0),
         reason=data.get("reason", ""),
-        assigned_hcp=request.user, # Default to the one creating it
+        assigned_hcp=request.user,
         assigned_hcp_name=request.user.get_full_name() or request.user.username,
         is_new_patient=is_new_patient,
         status="scheduled",
-        notes=data.get("notes", "")
+        notes=data.get("notes", ""),
+        google_meet_link=google_meet_link
     )
 
+    # ✅ Return response
     return Response(AppointmentSerializer(appt).data, status=201)
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

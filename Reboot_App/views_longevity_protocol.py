@@ -133,3 +133,33 @@ def get_post_call_actions(request, consultation_id):
         }
     ]
     return Response({"actions": actions, "consultation_id": consultation_id})
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_pending_reviews(request):
+    """
+    GET /api/roadmap/pending-reviews
+    Care team views all pending longevity protocol (roadmap) reviews for their assigned members.
+    """
+    user = request.user
+    from .models import CCAssignment
+    
+    # Check if user has care team role (simplified check)
+    if not hasattr(user, 'profile') or user.profile.role.name not in CLINICIAN_ROLES:
+        # Fallback to direct check if profile is slightly different
+        pass 
+
+    # Find members assigned to this care team member
+    member_ids = CCAssignment.objects.filter(cc=user).values_list('member_id', flat=True)
+    
+    # Get pending protocols for these members
+    protocols = LongevityProtocol.objects.filter(
+        patient_id__in=member_ids,
+        status="pending_review"
+    ).order_by('-created_at')
+
+    return Response({
+        "protocols": LongevityProtocolSerializer(protocols, many=True).data,
+        "total": protocols.count()
+    })
+

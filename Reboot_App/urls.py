@@ -122,6 +122,10 @@ urlpatterns = [
     path("reports/upload",                  views_biomarkers.upload_report),
     path("patient/biomarker-analytics",     views_biomarkers.get_biomarker_analytics),
     path("patient/<str:member_id>/biomarker-analytics", views_biomarkers.get_biomarker_analytics),
+    path("patient/<str:member_id>/medical-history", views_emr.medical_history_parity),
+    path("patient/messaging/send", views_cc.send_secure_message_parity),
+    path("patient/messaging/<str:member_id>", views_cc.get_messaging_thread_parity),
+
 
     # ── HPS ─────────────────────────────────────────────────────────────────
     path("hps/compute",                         views_hps.compute_hps_score),
@@ -228,6 +232,18 @@ urlpatterns = [
     path("cc/members/<str:member_id>/hallmarks", views_cc.get_member_hallmarks),
     path("cc/referrals",                     views_cc.cc_referrals),
     path("cc/ai-priority-feed",              views_cc.ai_priority_feed),
+    path("cc/lab-partners",                  views_clinical.list_lab_partners),
+    path("cc/pharmacy/catalog",              views_clinical.get_pharmacy_catalog),
+    path("cc/pharmacy/orders",                views_clinical.pharmacy_orders_view),
+
+    path("cc/nfle/tasks",                   views_cc.get_nfle_tasks),
+    
+    # Roadmap & Messaging (New Parity)
+    path("api/roadmap/pending-reviews",     views_longevity_protocol.get_pending_reviews),
+    path("patient/messaging/conversations", views_patient_chat.get_conversations),
+    path("patient/messaging/<int:member_id>", views_cc.get_messaging_thread_parity),
+
+
 
     # ── Coach ───────────────────────────────────────────────────────────────
     path("coach/assignments",                   views_coach.get_coach_assignments),
