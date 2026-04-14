@@ -488,6 +488,68 @@ def list_appointments(request):
 #     return Response(AppointmentSerializer(appt).data, status=201)
 
 
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def create_appointment(request):
+#     """
+#     POST /api/emr/appointments/create
+#     Creates a new appointment for a member.
+#     """
+
+#     # ✅ Role check
+#     allowed_roles = ["longevity_physician", "clinician", "medical_director", "clinical_admin"]
+#     if request.user.profile.role.name not in allowed_roles:
+#         return Response({"detail": "Access restricted to clinical team"}, status=403)
+
+#     data = request.data
+
+#     # ✅ Validate member_id
+#     member_id = data.get("member_id")
+#     if not member_id:
+#         return Response({"detail": "member_id is required"}, status=400)
+
+#     member = get_object_or_404(User, id=member_id)
+
+#     # ✅ Check if new patient
+#     is_new_patient = not EMREncounter.objects.filter(member=member).exists()
+
+#     # ✅ Handle scheduled_at safely
+#     scheduled_at = data.get("scheduled_at")
+#     if not scheduled_at:
+#         scheduled_at = timezone.now() + timedelta(days=1)
+
+#     # ✅ Normalize mode (IMPORTANT FIX)
+#     mode = data.get("mode", "telehealth").lower()
+
+#     # ✅ Generate Google Meet link only for telehealth
+#     google_meet_link = None
+#     if mode == "telehealth":
+#         google_meet_link = f"https://meet.google.com/rvp-{uuid.uuid4().hex[:4]}-{uuid.uuid4().hex[:3]}"
+
+#     # ✅ Create appointment
+#     appt = Appointment.objects.create(
+#         member=member,
+#         member_name=member.get_full_name() or member.username,
+#         appointment_type=data.get("appointment_type", "new" if is_new_patient else "follow_up"),
+#         mode=mode,
+#         scheduled_at=scheduled_at,
+#         duration_min=data.get("duration_min", 30),
+#         fee_type=data.get("fee_type", "insurance"),
+#         fee_amount=data.get("fee_amount", 0.0),
+#         reason=data.get("reason", ""),
+#         assigned_hcp=request.user,
+#         assigned_hcp_name=request.user.get_full_name() or request.user.username,
+#         is_new_patient=is_new_patient,
+#         status="scheduled",
+#         notes=data.get("notes", ""),
+#         google_meet_link=google_meet_link
+#     )
+
+#     # ✅ Return response
+#     return Response(AppointmentSerializer(appt).data, status=201)
+
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_appointment(request):
@@ -513,18 +575,18 @@ def create_appointment(request):
     # ✅ Check if new patient
     is_new_patient = not EMREncounter.objects.filter(member=member).exists()
 
-    # ✅ Handle scheduled_at safely
+    # ✅ Handle scheduled_at
     scheduled_at = data.get("scheduled_at")
     if not scheduled_at:
         scheduled_at = timezone.now() + timedelta(days=1)
 
-    # ✅ Normalize mode (IMPORTANT FIX)
+    # ✅ Normalize mode
     mode = data.get("mode", "telehealth").lower()
 
-    # ✅ Generate Google Meet link only for telehealth
-    google_meet_link = None
+    # ✅ Generate VALID meeting link (Jitsi - works instantly)
+    meeting_link = None
     if mode == "telehealth":
-        google_meet_link = f"https://meet.google.com/rvp-{uuid.uuid4().hex[:4]}-{uuid.uuid4().hex[:3]}"
+        meeting_link = f"https://meet.jit.si/health-{uuid.uuid4().hex[:8]}"
 
     # ✅ Create appointment
     appt = Appointment.objects.create(
@@ -542,11 +604,12 @@ def create_appointment(request):
         is_new_patient=is_new_patient,
         status="scheduled",
         notes=data.get("notes", ""),
-        google_meet_link=google_meet_link
+        google_meet_link=meeting_link   # ✅ now valid link
     )
 
-    # ✅ Return response
     return Response(AppointmentSerializer(appt).data, status=201)
+
+
 
 
 @api_view(['GET'])
