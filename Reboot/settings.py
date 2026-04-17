@@ -68,13 +68,13 @@ CORS_ALLOW_METHODS = [
 ]
 
 CORS_ALLOW_HEADERS = [
+    "accept",
     "authorization",
     "content-type",
-    "ngrok-skip-browser-warning",
-    "ngrok-skip-browser-warning",
-    "x-csrftoken",   # ← ADD THIS
-    "accept",
     "origin",
+    "x-csrftoken",
+    "x-requested-with",
+    "ngrok-skip-browser-warning",
 ]
 CSRF_TRUSTED_ORIGINS = [
      "http://16.170.222.16",
