@@ -144,10 +144,14 @@ def get_pending_reviews(request):
     user = request.user
     from .models import CCAssignment
     
-    # Check if user has care team role (simplified check)
-    if not hasattr(user, 'profile') or user.profile.role.name not in CLINICIAN_ROLES:
-        # Fallback to direct check if profile is slightly different
-        pass 
+    # Check if user has care team role (safely)
+    try:
+        user_role = user.profile.role.name if (hasattr(user, 'profile') and user.profile and user.profile.role) else ""
+    except Exception:
+        user_role = ""
+
+    if user_role not in CLINICIAN_ROLES:
+        return Response({"error": "Only care team can view pending reviews"}, status=403)
 
     # Find members assigned to this care team member
     member_ids = CCAssignment.objects.filter(cc=user).values_list('member_id', flat=True)
@@ -160,6 +164,7 @@ def get_pending_reviews(request):
 
     return Response({
         "protocols": LongevityProtocolSerializer(protocols, many=True).data,
-        "total": protocols.count()
+        "total": protocols.count(),
+        "count": protocols.count() # Parity key
     })
 

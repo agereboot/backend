@@ -11,7 +11,7 @@ from . import (
     views_video_consultation, views_patient_booking, views_patient_chat,
     views_longevity_protocol,
     views_notifications, views_outcome_learning,
-    views_lab_ingestion, views_misc, views_coach_v2, views_roadmap
+    views_lab_ingestion, views_misc, views_coach_v2, views_roadmap, views_cart
 )
 
 urlpatterns = [
@@ -123,6 +123,7 @@ urlpatterns = [
     path("patient/biomarker-analytics",     views_biomarkers.get_biomarker_analytics),
     path("patient/<str:member_id>/biomarker-analytics", views_biomarkers.get_biomarker_analytics),
     path("patient/<str:member_id>/medical-history", views_emr.medical_history_parity),
+    path("patient/messaging/conversations", views_patient_chat.get_conversations),
     path("patient/messaging/send", views_cc.send_secure_message_parity),
     path("patient/messaging/<str:member_id>", views_cc.get_messaging_thread_parity),
 
@@ -244,14 +245,16 @@ urlpatterns = [
     path("roadmap/all-reviews",         views_roadmap.get_all_reviews),
     path("roadmap/generate",            views_roadmap.generate_roadmap),
     path("roadmap/submit-for-review",   views_roadmap.submit_roadmap_for_review),
-    path("roadmap/<uuid:user_id>",      views_roadmap.get_roadmap),
+    path("roadmap/<str:user_id>",      views_roadmap.get_roadmap),
     path("roadmap/<uuid:review_id>/approve", views_roadmap.approve_roadmap),
     path("roadmap/<uuid:review_id>/reject",  views_roadmap.reject_roadmap),
     path("roadmap/review-history/<uuid:user_id>", views_roadmap.get_review_history),
 
-    path("patient/messaging/conversations", views_patient_chat.get_conversations),
-    path("patient/messaging/send",          views_cc.send_secure_message_parity),
-    path("patient/messaging/<int:member_id>", views_cc.get_messaging_thread_parity),
+    # Cart API
+    path("cart",            views_cart.get_cart),
+    path("cart/add",        views_cart.add_to_cart),
+    path("cart/remove",     views_cart.remove_from_cart),
+
 
 
 

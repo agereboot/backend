@@ -78,14 +78,35 @@ def generate_roadmap(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_roadmap(request, user_id=None):
-    """Get latest roadmap for a user, including approved longevity protocols."""
+    """Get latest roadmap for a user, including approved longevity protocols (Parity)."""
     uid = user_id or request.user.id
     
-    roadmap = Roadmap.objects.filter(user__id=uid).order_by("-created_at").first()
+    # Resolve user if uid is a string (e.g., "25" or "member_04")
+    target_user = None
+    if isinstance(uid, str):
+        # Case 1: uid is an integer string
+        if uid.isdigit():
+            target_user = User.objects.filter(id=int(uid)).first()
+        # Case 2: uid is a username
+        if not target_user:
+            target_user = User.objects.filter(username=uid).first()
+        # Case 3: uid is a UUID string (original intent)
+        if not target_user:
+            try:
+                target_user = User.objects.filter(id=uid).first()
+            except Exception:
+                pass
+    else:
+        target_user = User.objects.filter(id=uid).first()
+
+    if not target_user:
+        return Response({"error": "User not found"}, status=404)
+
+    roadmap = Roadmap.objects.filter(user=target_user).order_by("-created_at").first()
     
     # Include approved longevity protocols (parity check)
     approved_protocols = LongevityProtocol.objects.filter(
-        patient__id=uid, 
+        patient=target_user, 
         status__in=["approved", "active"]
     ).order_by("-created_at")
     

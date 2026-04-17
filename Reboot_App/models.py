@@ -152,10 +152,21 @@ class UserProfile(models.Model):
         return self.user.username
 
 
+class Cart(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="cart")
+    items = models.JSONField(default=list)
+    total_credits = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Cart: {self.user.username}"
+
+
 @receiver(post_save, sender=User)
-def create_profile(sender, instance, created, **kwargs):
+def create_user_related_objects(sender, instance, created, **kwargs):
     if created:
-        UserProfile.objects.create(user=instance)
+        UserProfile.objects.get_or_create(user=instance)
+        Cart.objects.get_or_create(user=instance)
 
 
 class EmployeePlan(models.Model):

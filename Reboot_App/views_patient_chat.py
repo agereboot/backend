@@ -189,27 +189,41 @@ def send_message(request, thread_id):
 def get_conversations(request):
     """
     GET /api/patient/messaging/conversations
-    Get all messaging conversations for the current user/HCP.
+    Get all messaging conversations for the current HCP.
     """
     user = request.user
-    print("user......",user)
     
-    # Get all messages where user is sender or recipient
+    # 1. HCP Role Check (Parity)
+    try:
+        role_name = user.profile.role.name.lower().replace(" ", "_")
+        ALLOWED_HCP = {
+            "longevity_physician", "fitness_coach", "psychologist",
+            "physical_therapist", "nutritional_coach", "nurse_navigator",
+            "clinician", "coach", "medical_director", "clinical_admin"
+        }
+        if role_name not in ALLOWED_HCP:
+            return Response({"error": "HCP role required"}, status=status.HTTP_403_FORBIDDEN)
+    except:
+        return Response({"error": "HCP role required"}, status=status.HTTP_403_FORBIDDEN)
+
+    # 2. Get all messages where user is sender or recipient
     from django.db.models import Q
     messages = CCMessage.objects.filter(
         Q(sender=user) | Q(recipient=user)
     ).order_by('-sent_at')[:500]
 
-    # Group by conversation partner
+    # 3. Group by conversation partner
     convos = {}
     for msg in messages:
         # Determine who the other person is
         if msg.sender_id == user.id:
             partner = msg.recipient
-            partner_name = partner.get_full_name() if partner else "Unknown"
+            # Use sender_name from message if possible (as legacy does for partner_name)
+            # but for recipient we don't have recipient_name in model, so we fetch from user
+            partner_name = partner.get_full_name() or partner.username if partner else "Unknown"
         else:
             partner = msg.sender
-            partner_name = msg.sender_name if msg.sender_name else (partner.get_full_name() if partner else "Unknown")
+            partner_name = msg.sender_name if msg.sender_name else (partner.get_full_name() or partner.username if partner else "Unknown")
             
         partner_id = str(partner.id) if partner else "system"
         
@@ -218,19 +232,18 @@ def get_conversations(request):
                 "partner_id": partner_id,
                 "partner_name": partner_name,
                 "last_message": msg.content[:80],
-                "last_message_at": msg.sent_at.isoformat(),
+                "last_message_at": msg.sent_at.isoformat() if hasattr(msg.sent_at, 'isoformat') else str(msg.sent_at),
                 "unread_count": 0,
                 "total_messages": 0,
             }
         
-        # Increment total messages
         convos[partner_id]["total_messages"] += 1
         
         # Count unread if user is the recipient
-        if msg.recipient_id == user.id and not getattr(msg, 'read', True):
+        if msg.recipient_id == user.id and not msg.read:
             convos[partner_id]["unread_count"] += 1
 
-    # Sort by most recent message time
+    # 4. Sort by most recent message time
     conversation_list = sorted(convos.values(), key=lambda c: c["last_message_at"], reverse=True)
     
     return Response({"conversations": conversation_list})
