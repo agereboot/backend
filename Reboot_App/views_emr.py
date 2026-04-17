@@ -1517,3 +1517,138 @@ def get_longevity_roadmap(request, member_id):
 def approve_longevity_protocols(request, member_id):
     # Logic to move protocols from CarePlan to Roadmap
     return Response({"status": "approved", "count": len(request.data.get("protocol_ids", []))})
+
+# -------------------------------------------------------------------------
+# APPOINTMENTS (LEGACY PARITY)
+# -------------------------------------------------------------------------
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_appointment_parity(request):
+    """
+    POST /api/emr/appointments
+    Creates an appointment and generates a Google Meet link if mode is telehealth.
+    """
+    data = request.data
+    member_id = data.get("member_id")
+    member = get_object_or_404(User, id=member_id)
+
+    # Determine if new or returning patient
+    prev_encounters = EMREncounter.objects.filter(member=member).count()
+    is_new_patient = prev_encounters == 0
+
+    appointment_type = data.get("appointment_type", "follow_up")
+    if is_new_patient:
+        appointment_type = "new"
+
+    mode = data.get("mode", "physical")
+    scheduled_at_str = data.get("scheduled_at")
+    if scheduled_at_str:
+        try:
+            scheduled_at = timezone.datetime.fromisoformat(scheduled_at_str.replace('Z', '+00:00'))
+        except ValueError:
+            scheduled_at = timezone.now()
+    else:
+        scheduled_at = timezone.now()
+
+    duration_min = int(data.get("duration_min", 30))
+    reason = data.get("reason", "")
+    
+    assigned_hcp_id = data.get("assigned_hcp_id")
+    if assigned_hcp_id:
+        assigned_hcp = get_object_or_404(User, id=assigned_hcp_id)
+    else:
+        assigned_hcp = request.user
+
+    # Determine if new or returning patient
+    prev_encounters = EMREncounter.objects.filter(member=member).count()
+    is_new_patient = (prev_encounters == 0)
+
+    # Google Meet Integration
+    meet_link = None
+    calendar_event_id = None
+    if mode == "telehealth":
+        patient_name = member.get_full_name() or member.username
+        hcp_name = assigned_hcp.get_full_name() or assigned_hcp.username
+        
+        try:
+            from Google_meet_service import create_google_meet_event
+            meet_info = create_google_meet_event(
+                title=f"Clinical Consultation: {patient_name} x {hcp_name}",
+                description=f"Reason: {reason}\nType: {appointment_type}",
+                start_datetime=scheduled_at,
+                duration_minutes=duration_min,
+                patient_email=member.email or f"{member.username}@agereboot.link",
+                doctor_email=assigned_hcp.email or f"{assigned_hcp.username}@agereboot.link"
+            )
+            meet_link = meet_info.get("meet_link")
+            calendar_event_id = meet_info.get("calendar_event_id")
+        except Exception as e:
+            # Fallback/Log error
+            print(f"Meet link generation failed: {e}")
+
+    appointment = Appointment.objects.create(
+        member=member,
+        member_name=member.get_full_name() or member.username,
+        appointment_type=appointment_type,
+        mode=mode,
+        scheduled_at=scheduled_at,
+        duration_min=duration_min,
+        fee_type=data.get("fee_type", "paid"),
+        fee_amount=float(data.get("fee_amount", 0.0)),
+        reason=reason,
+        assigned_hcp=assigned_hcp,
+        assigned_hcp_name=assigned_hcp.get_full_name() or assigned_hcp.username,
+        is_new_patient=is_new_patient,
+        status="scheduled",
+        notes=data.get("notes", ""),
+        google_meet_link=meet_link
+    )
+    return Response(AppointmentSerializer(appointment).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_appointments_parity(request):
+    """
+    GET /api/emr/appointments
+    Lists appointments with optional filters for status, hcp_id, and date.
+    """
+    status_filter = request.query_params.get("status")
+    hcp_id = request.query_params.get("hcp_id")
+    date_str = request.query_params.get("date")
+
+    queryset = Appointment.objects.all()
+
+    if status_filter:
+        queryset = queryset.filter(status=status_filter)
+    if hcp_id:
+        queryset = queryset.filter(assigned_hcp_id=hcp_id)
+    if date_str:
+        queryset = queryset.filter(scheduled_at__date=date_str)
+
+    queryset = queryset.order_by('scheduled_at')
+    
+    return Response({
+        "appointments": AppointmentSerializer(queryset, many=True).data,
+        "total": queryset.count()
+    })
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def get_appointment_detail_parity(request, appt_id):
+    """
+    GET/PUT /api/emr/appointments/{appt_id}
+    """
+    appointment = get_object_or_404(Appointment, id=appt_id)
+
+    if request.method == 'PUT':
+        data = request.data
+        if "status" in data:
+            appointment.status = data["status"]
+        if "notes" in data:
+            appointment.notes = data["notes"]
+        appointment.save()
+
+    return Response(AppointmentSerializer(appointment).data)

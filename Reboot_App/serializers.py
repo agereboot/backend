@@ -9,12 +9,12 @@ from .models import (
     BiomarkerCorrelation, WearableDevice, WearableConnection,
     CognitiveAssessmentTemplate, CognitiveAssessmentResult,
     ReportRepository, PillarConfig,
-    HPSScore, SupportTicket, CCAssignment, CCAlert, CCSession, CCProtocol,
+    HPSScore, SupportTicket, CCAssignment, CCAlert, CCSession, CCProtocol, Roadmap, RoadmapReview,
     Appointment, MemberMedicalHistory, VitalsLog, EMREncounter,
     NutritionLog, NutritionPlan, CCPrescription, CarePlan, CCMessage, 
     CCOverrideAudit, CCReferral, NFLETask, Escalation, VideoConsultation, Notification,
     LabOrder, LabPartner, LabPanel, Phlebotomist, SampleBooking, TelehealthSession,
-    LongevityProtocol, OutcomeCycle, HealthBrief,
+    LongevityProtocol, OutcomeCycle, HealthBrief, AdaptiveAssessment,
     OrganSystem, AppointmentService, MedicalCondition, MedicationLog, RefillRequest, SOSAlert, Medication,
     Medication, EMRAllergy, DiagnosticOrder, DiagnosticCatalog,
     LabIngestionReport
@@ -799,3 +799,30 @@ class HealthBriefSerializer(serializers.ModelSerializer):
         model = HealthBrief
         fields = "__all__"
         read_only_fields = ["id", "created_at"]
+
+class AdaptiveAssessmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AdaptiveAssessment
+        fields = "__all__"
+        read_only_fields = ["id", "timestamp"]
+
+class RoadmapSerializer(serializers.ModelSerializer):
+    user_id = serializers.CharField(source="user.id", read_only=True)
+    timestamp = serializers.DateTimeField(source="created_at", read_only=True)
+    
+    class Meta:
+        model = Roadmap
+        fields = [
+            "id", "user_id", "timestamp", "hps_at_generation", 
+            "ai_narrative", "gaps", "protocols", "interventions", 
+            "biological_age", "phases", "generated", "title", "status"
+        ]
+        read_only_fields = ["id", "timestamp"]
+
+class RoadmapReviewSerializer(serializers.ModelSerializer):
+    reviewer_name = serializers.CharField(source="reviewer.get_full_name", read_only=True)
+    
+    class Meta:
+        model = RoadmapReview
+        fields = "__all__"
+        read_only_fields = ["id", "reviewed_at"]

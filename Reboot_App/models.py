@@ -747,6 +747,9 @@ class CCProtocol(models.Model):
     expected_outcomes = models.JSONField(default=list)
     hps_dimensions = models.JSONField(default=list)
     impact_scores = models.JSONField(default=dict)
+    hallmarks_of_ageing = models.JSONField(default=list)
+    codes = models.JSONField(default=dict)
+    interventions = models.JSONField(default=list)
     contraindications = models.JSONField(default=list)
     drug_interactions = models.JSONField(default=list)
     smart_goals_template = models.JSONField(default=dict)
@@ -926,7 +929,7 @@ class TherapyProgram(models.Model):
 class TherapyNote(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     member = models.ForeignKey(User, on_delete=models.CASCADE, related_name="therapy_notes")
-    therapist = models.ForeignKey(User, on_delete=models.CASCADE, related_name="written_therapy_notes")
+    therapist = models.ForeignKey(User, on_delete=models.CASCADE, related_name="therapy_notes_written")
     session_date = models.DateTimeField(default=timezone.now)
     session_type = models.CharField(max_length=50, default="individual")
     subjective = models.TextField(blank=True)
@@ -996,8 +999,8 @@ class MealPlanDay(models.Model):
 
 class NutritionConsultationNote(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    member = models.ForeignKey(User, on_delete=models.CASCADE, related_name="nutrition_notes")
-    nutritionist = models.ForeignKey(User, on_delete=models.CASCADE, related_name="written_nutrition_notes")
+    member = models.ForeignKey(User, on_delete=models.CASCADE, related_name="nutrition_consult_notes")
+    nutritionist = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notes_written_nutrition")
     date = models.DateField(default=timezone.now)
     dietary_analysis = models.TextField(blank=True)
     recommendations = models.TextField(blank=True)
@@ -1026,7 +1029,7 @@ class Habit(models.Model):
 
 class HabitLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    habit = models.ForeignKey(Habit, on_delete=models.CASCADE, related_name="logs")
+    habit = models.ForeignKey(Habit, on_delete=models.CASCADE, related_name="habit_logs")
     member = models.ForeignKey(User, on_delete=models.CASCADE)
     date = models.DateField()
     completed = models.BooleanField(default=True)
@@ -1116,7 +1119,7 @@ class MemberMedicalHistory(models.Model):
 
 class VitalsLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    member = models.ForeignKey(User, on_delete=models.CASCADE, related_name="vitals_logs")
+    member = models.ForeignKey(User, on_delete=models.CASCADE, related_name="user_vitals_logs")
     vitals = models.JSONField(default=dict)
     recorded_at = models.DateTimeField(default=timezone.now)
     recorded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="recorded_vitals")
@@ -1153,7 +1156,7 @@ class EMREncounter(models.Model):
 
 class NutritionLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="nutrition_logs")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="user_nutrition_logs")
     date = models.DateField(default=timezone.now)
     meal_type = models.CharField(max_length=50)
     items = models.JSONField(default=list)
@@ -1236,7 +1239,7 @@ class PlatformContent(models.Model):
 
 class AuditLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="audit_logs")
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="user_audit_logs")
     action = models.CharField(max_length=255)
     resource = models.CharField(max_length=150)
     details = models.JSONField(default=dict)
@@ -1705,7 +1708,7 @@ class WhatsappLog(models.Model):
     """Maps to mongo: db.whatsapp_logs"""
     id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user         = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
-                                     related_name="whatsapp_logs")
+                                     related_name="user_whatsapp_logs")
     phone        = models.CharField(max_length=20)
     message_type = models.CharField(max_length=60)   # alert, reminder, report, etc.
     content      = models.TextField(blank=True)
@@ -1894,6 +1897,13 @@ class Roadmap(models.Model):
     phases      = models.JSONField(default=list)
     ai_summary  = models.TextField(blank=True)
     status      = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
+    hps_at_generation = models.FloatField(default=0.0)
+    ai_narrative      = models.TextField(blank=True, null=True)
+    gaps              = models.JSONField(default=list)
+    protocols         = models.JSONField(default=list)
+    interventions     = models.JSONField(default=list)
+    biological_age    = models.JSONField(default=dict)
+    generated         = models.BooleanField(default=False)
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
 
@@ -2630,7 +2640,7 @@ class MedicationLog(models.Model):
     """Tracks medication compliance."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="medication_logs")
-    medication = models.ForeignKey(Medication, on_delete=models.CASCADE, related_name="logs")
+    medication = models.ForeignKey(Medication, on_delete=models.CASCADE, related_name="medication_entry_logs")
     medication_name = models.CharField(max_length=255)
     date = models.DateField(default=timezone.now)
     logged_at = models.DateTimeField(auto_now_add=True)

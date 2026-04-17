@@ -11,7 +11,7 @@ from .hps_engine.scoring import compute_hps
 from .hps_engine.predictions import predict_hps_trajectory
 from .hps_engine.questionnaire_scoring import compute_ca_score
 from .models import BiomarkerResult, HPSScore, AdaptiveAssessment, CAAssessment, MentalAssessment, User
-from .serializers import HPSScoreSerializer
+from .serializers import HPSScoreSerializer, AdaptiveAssessmentSerializer
 
 _QUESTION_BANK = [
     # --- Mood & Energy (maps → PHQ-9 / depression) ---
@@ -269,3 +269,9 @@ def get_latest_adaptive_assessment(request):
         "ca_result": doc.ca_result,
         "timestamp": doc.timestamp
     })
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_adaptive_assessment_history(request):
+    """Fetch assessment history for parity."""
+    docs = AdaptiveAssessment.objects.filter(user=request.user).order_by('-timestamp')[:20]
+    return Response({"history": AdaptiveAssessmentSerializer(docs, many=True).data})

@@ -9,7 +9,7 @@ import uuid
 import random
 
 from .models import SampleBooking, User, Notification, LabOrder
-from .serializers import SampleBookingSerializer
+from .serializers import SampleBookingSerializer, LabOrderSerializer
 
 AVAILABLE_SLOTS = [
     {"label": "7:00 - 9:00 AM", "code": "07-09", "fasting_friendly": True},
@@ -80,7 +80,7 @@ def book_sample_collection(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def get_pending_order_info(request):
+def get_post_consultation_info(request):
     """Get post-consultation info showing pending lab orders for booking."""
     pending_orders = LabOrder.objects.filter(
         patient=request.user, 
@@ -92,7 +92,7 @@ def get_pending_order_info(request):
     ).exclude(status__in=["report_ready", "cancelled"])[:10]
 
     return Response({
-        "pending_lab_orders": [], # Will populate once LabOrder model usage is confirmed
+        "pending_lab_orders": LabOrderSerializer(pending_orders, many=True).data,
         "active_bookings": SampleBookingSerializer(active_bookings, many=True).data,
         "has_pending_orders": pending_orders.exists(),
     })

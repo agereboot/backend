@@ -601,11 +601,18 @@ def get_cc_protocols(request):
     serializer = CCProtocolSerializer(protocols, many=True)
     
     # Unique cats and hallmarks
-    categories = list(CCProtocol.objects.values_list('category', flat=True).distinct())
+    categories = sorted(list(CCProtocol.objects.values_list('category', flat=True).distinct()))
+    
+    all_hallmarks = set()
+    for p in CCProtocol.objects.values_list('hallmarks_of_ageing', flat=True):
+        if p:
+            all_hallmarks.update(p)
+    hallmarks = sorted(list(all_hallmarks))
     
     return Response({
-        "protocols": serializer.data,
         "categories": categories,
+        "hallmarks": hallmarks,
+        "protocols": serializer.data,
         "total": protocols.count()
     })
 

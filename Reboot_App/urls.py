@@ -11,7 +11,7 @@ from . import (
     views_video_consultation, views_patient_booking, views_patient_chat,
     views_longevity_protocol,
     views_notifications, views_outcome_learning,
-    views_lab_ingestion, views_misc, views_coach_v2
+    views_lab_ingestion, views_misc, views_coach_v2, views_roadmap
 )
 
 urlpatterns = [
@@ -136,6 +136,8 @@ urlpatterns = [
     path("hps/adaptive-assessment/questions", views_hps.get_adaptive_questions),
     path("hps/adaptive-assessment/submit",    views_hps.submit_adaptive_assessment),
     path("hps/adaptive-assessment/latest",    views_hps.get_latest_adaptive_assessment),
+    path("hps/adaptive-assessment/history",   views_hps.get_adaptive_assessment_history),
+
 
     # ── Health ──────────────────────────────────────────────────────────────
     path("health/organ-ages",                   views_health.predict_organ_ages),
@@ -200,12 +202,11 @@ urlpatterns = [
     path("emr/member/<str:member_id>/care-plan", views_emr.get_emr_care_plan),
     path("emr/member/<str:member_id>/longevity-roadmap", views_emr.get_longevity_roadmap),
     path("emr/member/<str:member_id>/longevity-roadmap/approve", views_emr.approve_longevity_protocols),
-    path("emr/appointments",                    views_emr.list_appointments),
-    path("emr/appointments/create",             views_emr.create_appointment),
-    path("emr/appointments/member",             views_emr.get_user_appointments),
-    path("emr/appointments/hcp",                views_emr.get_hcp_appointments),
-    path("emr/appointments/<str:apt_id>",            views_emr.get_appointment_detail),
-    path("emr/appointments/<str:pt_id>/status", views_emr.update_appointment_status),
+    # ── EMR Appointments Parity ────────────────────────────────────────────
+    path("emr/appointments",                    views_emr.list_appointments_parity),
+    path("emr/appointments/create",             views_emr.create_appointment_parity),
+    path("emr/appointments/<uuid:appt_id>",     views_emr.get_appointment_detail_parity),
+    path("emr/member/<str:member_id>/longevity-roadmap/approve", views_emr.approve_longevity_protocols),
 
     # ── Care Coordination (CC) Parity ──────────────────────────────────────
     path("cc/dashboard",                    views_cc.cc_dashboard),
@@ -239,8 +240,17 @@ urlpatterns = [
     path("cc/nfle/tasks",                   views_cc.get_nfle_tasks),
     
     # Roadmap & Messaging (New Parity)
-    path("api/roadmap/pending-reviews",     views_longevity_protocol.get_pending_reviews),
+    path("roadmap/pending-reviews",     views_longevity_protocol.get_pending_reviews),
+    path("roadmap/all-reviews",         views_roadmap.get_all_reviews),
+    path("roadmap/generate",            views_roadmap.generate_roadmap),
+    path("roadmap/submit-for-review",   views_roadmap.submit_roadmap_for_review),
+    path("roadmap/<uuid:user_id>",      views_roadmap.get_roadmap),
+    path("roadmap/<uuid:review_id>/approve", views_roadmap.approve_roadmap),
+    path("roadmap/<uuid:review_id>/reject",  views_roadmap.reject_roadmap),
+    path("roadmap/review-history/<uuid:user_id>", views_roadmap.get_review_history),
+
     path("patient/messaging/conversations", views_patient_chat.get_conversations),
+    path("patient/messaging/send",          views_cc.send_secure_message_parity),
     path("patient/messaging/<int:member_id>", views_cc.get_messaging_thread_parity),
 
 
@@ -278,7 +288,7 @@ urlpatterns = [
     path("patient-booking/available-slots",           views_patient_booking.get_available_booking_slots),
     path("patient-booking/book",            views_patient_booking.book_sample_collection),
     path("patient-booking/my-bookings",     views_patient_booking.get_my_bookings),
-    path("patient-booking/pending-order-info", views_patient_booking.get_pending_order_info),
+    path("patient-booking/post-consultation", views_patient_booking.get_post_consultation_info),
 
     # ── Patient Chat Parity ────────────────────────────────────────────────
     path("patient-chat/threads",                    views_patient_chat.get_chat_threads),
