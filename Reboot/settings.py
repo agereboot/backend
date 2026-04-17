@@ -32,8 +32,7 @@ SECRET_KEY = 'django-insecure-lg7i8v#3k(1l7l0w#8(l94#0piebbb)*#j#fvvph8$i)a92+x*
 DEBUG = True
 
 # ALLOWED_HOSTS = ['*']
-ALLOWED_HOSTS = ['16.170.222.16']
-
+ALLOWED_HOSTS = ['16.170.222.16', 'localhost', '127.0.0.1', '*']
 
 # Application definition
 
@@ -62,10 +61,20 @@ INSTALLED_APPS = [
 
 CORS_ALLOW_ALL_ORIGINS = True
 
+CORS_ALLOW_CREDENTIALS = True 
+
+CORS_ALLOW_METHODS = [
+    "DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT",
+]
+
 CORS_ALLOW_HEADERS = [
     "authorization",
     "content-type",
     "ngrok-skip-browser-warning",
+    "ngrok-skip-browser-warning",
+    "x-csrftoken",   # ← ADD THIS
+    "accept",
+    "origin",
 ]
 CSRF_TRUSTED_ORIGINS = [
      "http://16.170.222.16",
@@ -240,16 +249,18 @@ ACCOUNT_LOGOUT_ON_GET = True
 # DEFAULT_FROM_EMAIL = 'kavyasetava2025@gmail.com'
 
 
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# comments cors error
 
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
+# EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
-EMAIL_HOST_USER = 'setavakavya2025@gmail.com'
-EMAIL_HOST_PASSWORD =  'ybgwhqvdattxlsek' 
+# EMAIL_HOST = 'smtp.gmail.com'
+# EMAIL_PORT = 587
+# EMAIL_USE_TLS = True
 
-DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+# EMAIL_HOST_USER = 'setavakavya2025@gmail.com'
+# EMAIL_HOST_PASSWORD =  'ybgwhqvdattxlsek' 
+
+# DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
