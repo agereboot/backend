@@ -260,3 +260,6 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = "kavyasetava135@gmail.com"
 EMAIL_HOST_PASSWORD = "qmrfcfshvmyrnhwd"
 
+STATIC_URL = '/static/'
+
+STATIC_ROOT = '/home/ec2-user/backend/static/'
