@@ -84,10 +84,7 @@ CORS_ALLOW_HEADERS = [
     "ngrok-skip-browser-warning",
 ]
 CSRF_TRUSTED_ORIGINS = [
-     "http://16.170.222.16",
-     "staging.dq5uhzh225bgf.amplifyapp.com",
-    "https://isochroous-unlidded-elvina.ngrok-free.dev",
-    
+     "https://staging.dq5uhzh225bgf.amplifyapp.com",
 ]
 
 # CORS_ALLOWED_ORIGINS = [
