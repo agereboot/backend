@@ -1668,6 +1668,7 @@ def create_appointment_parity(request):
     meet_link = None
     calendar_event_id = None
     if mode == "telehealth":
+        meet_link = "https://meet.google.com/kyj-gkgo-emk"
         patient_name = member.get_full_name() or member.username
         hcp_name = assigned_hcp.get_full_name() or assigned_hcp.username
         
