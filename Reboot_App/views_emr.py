@@ -556,28 +556,32 @@ def list_appointments(request):
 
 from django.utils.dateparse import parse_datetime
 
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_appointment(request):
     """
-    Creates appointment + real Google Meet link
+    Creates appointment with static Google Meet link (temporary solution)
     """
 
+    # ✅ Role check
     allowed_roles = ["longevity_physician", "clinician", "medical_director", "clinical_admin"]
     if request.user.profile.role.name not in allowed_roles:
         return Response({"detail": "Access restricted to clinical team"}, status=403)
 
     data = request.data
 
+    # ✅ Validate member_id
     member_id = data.get("member_id")
     if not member_id:
         return Response({"detail": "member_id is required"}, status=400)
 
     member = get_object_or_404(User, id=member_id)
 
+    # ✅ Check if new patient
     is_new_patient = not EMREncounter.objects.filter(member=member).exists()
 
-    # ✅ FIX 1: Proper datetime parsing
+    # ✅ Parse scheduled_at safely
     scheduled_at_str = data.get("scheduled_at")
     if scheduled_at_str:
         scheduled_at = parse_datetime(scheduled_at_str)
@@ -586,41 +590,26 @@ def create_appointment(request):
     else:
         scheduled_at = timezone.now() + timedelta(days=1)
 
-    # Ensure timezone-aware
+    # ✅ Ensure timezone-aware
     if timezone.is_naive(scheduled_at):
         scheduled_at = timezone.make_aware(scheduled_at)
 
+    # ✅ Normalize mode
     mode = data.get("mode", "telehealth").lower()
 
-    # 🚀 Google Meet creation
+    # 🚀 STATIC GOOGLE MEET LINK (WORKING)
     meeting_link = None
     if mode == "telehealth":
-        try:
-            start_time = scheduled_at
-            end_time = scheduled_at + timedelta(minutes=int(data.get("duration_min", 30)))
+        meeting_link = "https://meet.google.com/kyj-gkgo-emk"
 
-            meeting_link = create_google_meet_event(
-                summary=f"Appointment with {member.get_full_name()}",
-                start_time=start_time,
-                end_time=end_time
-            )
-
-            # 🔥 CRITICAL FIX → reject invalid links
-            if not meeting_link or "placeholder" in meeting_link:
-                print("❌ Invalid Meet link:", meeting_link)
-                meeting_link = None
-            else:
-                print("✅ Valid Meet link:", meeting_link)
-
-        except Exception as e:
-            print("Google Meet Error:", str(e))
-            meeting_link = None
-
-    # ✅ Save appointment
+    # ✅ Create appointment
     appt = Appointment.objects.create(
         member=member,
         member_name=member.get_full_name() or member.username,
-        appointment_type=data.get("appointment_type", "new" if is_new_patient else "follow_up"),
+        appointment_type=data.get(
+            "appointment_type",
+            "new" if is_new_patient else "follow_up"
+        ),
         mode=mode,
         scheduled_at=scheduled_at,
         duration_min=data.get("duration_min", 30),
@@ -632,7 +621,7 @@ def create_appointment(request):
         is_new_patient=is_new_patient,
         status="scheduled",
         notes=data.get("notes", ""),
-        google_meet_link=meeting_link
+        google_meet_link=meeting_link   # ✅ Always valid
     )
 
     return Response(AppointmentSerializer(appt).data, status=201)
@@ -642,41 +631,63 @@ def create_appointment(request):
 # @permission_classes([IsAuthenticated])
 # def create_appointment(request):
 #     """
-#     POST /api/emr/appointments/create
-#     Creates a new appointment for a member.
+#     Creates appointment + real Google Meet link
 #     """
 
-#     # ✅ Role check
 #     allowed_roles = ["longevity_physician", "clinician", "medical_director", "clinical_admin"]
 #     if request.user.profile.role.name not in allowed_roles:
 #         return Response({"detail": "Access restricted to clinical team"}, status=403)
 
 #     data = request.data
 
-#     # ✅ Validate member_id
 #     member_id = data.get("member_id")
 #     if not member_id:
 #         return Response({"detail": "member_id is required"}, status=400)
 
 #     member = get_object_or_404(User, id=member_id)
 
-#     # ✅ Check if new patient
 #     is_new_patient = not EMREncounter.objects.filter(member=member).exists()
 
-#     # ✅ Handle scheduled_at
-#     scheduled_at = data.get("scheduled_at")
-#     if not scheduled_at:
+#     # ✅ FIX 1: Proper datetime parsing
+#     scheduled_at_str = data.get("scheduled_at")
+#     if scheduled_at_str:
+#         scheduled_at = parse_datetime(scheduled_at_str)
+#         if not scheduled_at:
+#             scheduled_at = timezone.now() + timedelta(days=1)
+#     else:
 #         scheduled_at = timezone.now() + timedelta(days=1)
 
-#     # ✅ Normalize mode
+#     # Ensure timezone-aware
+#     if timezone.is_naive(scheduled_at):
+#         scheduled_at = timezone.make_aware(scheduled_at)
+
 #     mode = data.get("mode", "telehealth").lower()
 
-#     # ✅ Generate VALID meeting link (Jitsi - works instantly)
+#     # 🚀 Google Meet creation
 #     meeting_link = None
 #     if mode == "telehealth":
-#         meeting_link = f"https://meet.jit.si/health-{uuid.uuid4().hex[:8]}"
+#         try:
+#             start_time = scheduled_at
+#             end_time = scheduled_at + timedelta(minutes=int(data.get("duration_min", 30)))
 
-#     # ✅ Create appointment
+#             meeting_link = create_google_meet_event(
+#                 summary=f"Appointment with {member.get_full_name()}",
+#                 start_time=start_time,
+#                 end_time=end_time
+#             )
+
+#             # 🔥 CRITICAL FIX → reject invalid links
+#             if not meeting_link or "placeholder" in meeting_link:
+#                 print("❌ Invalid Meet link:", meeting_link)
+#                 meeting_link = None
+#             else:
+#                 print("✅ Valid Meet link:", meeting_link)
+
+#         except Exception as e:
+#             print("Google Meet Error:", str(e))
+#             meeting_link = None
+
+#     # ✅ Save appointment
 #     appt = Appointment.objects.create(
 #         member=member,
 #         member_name=member.get_full_name() or member.username,
@@ -692,7 +703,7 @@ def create_appointment(request):
 #         is_new_patient=is_new_patient,
 #         status="scheduled",
 #         notes=data.get("notes", ""),
-#         google_meet_link=meeting_link   # ✅ now valid link
+#         google_meet_link=meeting_link
 #     )
 
 #     return Response(AppointmentSerializer(appt).data, status=201)
