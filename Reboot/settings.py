@@ -29,10 +29,11 @@ env.read_env(BASE_DIR / ".env")
 SECRET_KEY = 'django-insecure-lg7i8v#3k(1l7l0w#8(l94#0piebbb)*#j#fvvph8$i)a92+x*'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# DEBUG = True
+DEBUG = False
 
 # ALLOWED_HOSTS = ['*']
-ALLOWED_HOSTS = ['16.170.222.16', 'localhost', '127.0.0.1', '*']
+ALLOWED_HOSTS = ['16.170.222.16', 'localhost', '127.0.0.1', '*','staging.dq5uhzh225bgf.amplifyapp.com']
 
 # Application definition
 
@@ -62,6 +63,8 @@ INSTALLED_APPS = [
 CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOW_CREDENTIALS = True 
+CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = True
 
 CORS_ALLOW_METHODS = [
     "DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT",
@@ -78,7 +81,9 @@ CORS_ALLOW_HEADERS = [
 ]
 CSRF_TRUSTED_ORIGINS = [
      "http://16.170.222.16",
-    "https://isochroous-unlidded-elvina.ngrok-free.dev"
+     "staging.dq5uhzh225bgf.amplifyapp.com",
+    "https://isochroous-unlidded-elvina.ngrok-free.dev",
+    
 ]
 
 # CORS_ALLOWED_ORIGINS = [
