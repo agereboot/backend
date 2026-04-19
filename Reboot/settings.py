@@ -29,11 +29,11 @@ env.read_env(BASE_DIR / ".env")
 SECRET_KEY = 'django-insecure-lg7i8v#3k(1l7l0w#8(l94#0piebbb)*#j#fvvph8$i)a92+x*'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-# DEBUG = False
+# DEBUG = True
+DEBUG = False
 
 # ALLOWED_HOSTS = ['*']
-ALLOWED_HOSTS = ['16.170.222.16', 'localhost', '127.0.0.1', '*','staging.dq5uhzh225bgf.amplifyapp.com', "app.agereboot.life",]
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*','staging.dq5uhzh225bgf.amplifyapp.com', "app.agereboot.life",]
 
 # Application definition
 
@@ -64,16 +64,18 @@ CORS_ALLOW_ALL_ORIGINS = False
 
 CORS_ALLOWED_ORIGINS = [
     "https://app.agereboot.life",
-    "http://16.170.222.16",
     "https://staging.dq5uhzh225bgf.amplifyapp.com",
+    "http://localhost:3000", 
 ]
 
 CORS_ALLOW_CREDENTIALS = True 
-CSRF_COOKIE_SECURE = False  # make this true (url in https)
-SESSION_COOKIE_SECURE = False # make this true (url in https)
+CSRF_COOKIE_SECURE = True  # make this true (url in https)
+SESSION_COOKIE_SECURE = True # make this true (url in https)
 
-CSRF_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SAMESITE = "Lax"
+# CSRF_COOKIE_SAMESITE = "Lax"
+# SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "None"
+SESSION_COOKIE_SAMESITE = "None"
 
 
 CORS_ALLOW_METHODS = [
