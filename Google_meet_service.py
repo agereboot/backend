@@ -84,7 +84,7 @@ def create_google_meet_event(*, title, description, start_datetime, duration_min
     if service is None:
         fake_code = uuid.uuid4().hex[:12]
         return {
-            "meet_link":         f"https://meet.google.com/placeholder-{fake_code}",
+            "meet_link":         "https://meet.google.com/kyj-gkgo-emk",
             "calendar_event_id": f"placeholder_event_{fake_code}",
             "html_link":         "",
         }
