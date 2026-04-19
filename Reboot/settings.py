@@ -29,8 +29,8 @@ env.read_env(BASE_DIR / ".env")
 SECRET_KEY = 'django-insecure-lg7i8v#3k(1l7l0w#8(l94#0piebbb)*#j#fvvph8$i)a92+x*'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# DEBUG = True
-DEBUG = False
+DEBUG = True
+# DEBUG = False
 
 # ALLOWED_HOSTS = ['*']
 ALLOWED_HOSTS = ['16.170.222.16', 'localhost', '127.0.0.1', '*','staging.dq5uhzh225bgf.amplifyapp.com']
