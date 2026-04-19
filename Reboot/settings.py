@@ -60,7 +60,11 @@ INSTALLED_APPS = [
 
 
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
+
+CORS_ALLOWED_ORIGINS = [
+    "https://staging.dq5uhzh225bgf.amplifyapp.com",
+]
 
 CORS_ALLOW_CREDENTIALS = True 
 CSRF_COOKIE_SECURE = True
@@ -91,9 +95,7 @@ CSRF_TRUSTED_ORIGINS = [
 #     "http://192.168.1.9:3000",
 # ]
 
-CORS_ALLOWED_ORIGINS = [
-    "https://staging.dq5uhzh225bgf.amplifyapp.com",
-]
+
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
