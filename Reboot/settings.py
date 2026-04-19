@@ -33,7 +33,7 @@ DEBUG = True
 # DEBUG = False
 
 # ALLOWED_HOSTS = ['*']
-ALLOWED_HOSTS = ['16.170.222.16', 'localhost', '127.0.0.1', '*','staging.dq5uhzh225bgf.amplifyapp.com']
+ALLOWED_HOSTS = ['16.170.222.16', 'localhost', '127.0.0.1', '*','staging.dq5uhzh225bgf.amplifyapp.com', "app.agereboot.life",]
 
 # Application definition
 
@@ -63,13 +63,14 @@ INSTALLED_APPS = [
 CORS_ALLOW_ALL_ORIGINS = False
 
 CORS_ALLOWED_ORIGINS = [
+    "https://app.agereboot.life",
     "http://16.170.222.16",
     "https://staging.dq5uhzh225bgf.amplifyapp.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True 
-CSRF_COOKIE_SECURE = False
-SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False  # make this true (url in https)
+SESSION_COOKIE_SECURE = False # make this true (url in https)
 
 CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SAMESITE = "Lax"
@@ -89,6 +90,7 @@ CORS_ALLOW_HEADERS = [
     "ngrok-skip-browser-warning",
 ]
 CSRF_TRUSTED_ORIGINS = [
+     "https://app.agereboot.life",
      "https://staging.dq5uhzh225bgf.amplifyapp.com",
 ]
 
@@ -288,3 +290,6 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 STATIC_URL = '/static/'
 
 STATIC_ROOT = '/home/ec2-user/backend/static/'
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = True
